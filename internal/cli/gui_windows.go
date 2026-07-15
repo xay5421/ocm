@@ -24,3 +24,16 @@ func launchedFromGUI() bool {
 	n, _, _ := proc.Call(uintptr(unsafe.Pointer(&pids[0])), uintptr(len(pids)))
 	return n == 1
 }
+
+// freeConsole detaches ocm from its console so the window that Windows
+// created for a double-click launch disappears; the process keeps running in
+// the background. Console output is lost afterwards, which is fine for the
+// dashboard (it reports errors in the browser).
+func freeConsole() {
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	proc := kernel32.NewProc("FreeConsole")
+	if err := proc.Find(); err != nil {
+		return
+	}
+	proc.Call()
+}

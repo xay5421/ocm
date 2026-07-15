@@ -161,7 +161,8 @@ only.
 You can also start the dashboard by **double-clicking the ocm binary**:
 
 - **Windows**: double-click `ocm.exe` in Explorer — ocm detects the GUI
-  launch and starts the dashboard (closing the console window stops it).
+  launch, detaches from its console (the window closes by itself), and runs
+  the dashboard in the background. Use the dashboard's quit button to stop it.
 - **Linux**: double-click / "Run" the binary in a file manager — detected via
   the missing terminal.
 - **macOS**: Finder runs command-line binaries inside a Terminal window, so a

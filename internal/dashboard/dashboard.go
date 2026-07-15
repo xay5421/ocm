@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -43,7 +44,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/local/up", s.handleLocalUp)
 	mux.HandleFunc("POST /api/local/{pid}/down", s.handleLocalDown)
 	mux.HandleFunc("POST /api/local/{pid}/restart", s.handleLocalRestart)
+	mux.HandleFunc("POST /api/quit", s.handleQuit)
 	return mux
+}
+
+// handleQuit exits the ocm process. It exists so the dashboard can be closed
+// when there is no terminal to Ctrl-C (e.g. started by double-click).
+// Tunnels and servers keep running; only the dashboard process stops.
+func (s *Server) handleQuit(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]bool{"ok": true})
+	go func() {
+		time.Sleep(200 * time.Millisecond) // let the response flush
+		os.Exit(0)
+	}()
 }
 
 // Serve blocks serving HTTP on addr until ctx is cancelled.

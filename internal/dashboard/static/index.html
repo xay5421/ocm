@@ -16,6 +16,7 @@
   main { max-width: 680px; margin: 0 auto; padding: 40px 20px; }
   h1 { font-size: 16px; margin: 0 0 16px; display: flex; align-items: center; }
   h1 .sub { font-size: 12px; color: var(--dim); font-weight: normal; margin-left: 10px; }
+  h1 .quit { margin-left: auto; font-size: 12px; padding: 4px 10px; }
   .row { display: flex; align-items: center; gap: 12px; background: var(--panel);
          border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px;
          margin-bottom: 10px; }
@@ -49,7 +50,9 @@
 </head>
 <body>
 <main>
-  <h1>opencode 连接<span class="sub" id="updated"></span></h1>
+  <h1>opencode 连接<span class="sub" id="updated"></span>
+    <button class="quit danger" onclick="quitOcm()" title="退出 ocm dashboard 进程（隧道和服务器继续运行）">退出</button>
+  </h1>
   <div id="hosts"></div>
 </main>
 <div id="toast"></div>
@@ -167,6 +170,14 @@ async function act(path, key, verb, btn) {
   refresh();
 }
 
+async function quitOcm() {
+  if (!confirm("退出 ocm dashboard？隧道和 opencode 服务器会继续运行。")) return;
+  clearInterval(refreshTimer);
+  try { await api("/api/quit", {method: "POST"}); } catch (e) {}
+  document.body.innerHTML =
+    '<main><h1>ocm dashboard 已退出</h1><p style="color:var(--dim)">可以关闭此页面。</p></main>';
+}
+
 function copyAttach(url) {
   const cmd = "opencode attach " + url;
   navigator.clipboard.writeText(cmd)
@@ -175,7 +186,7 @@ function copyAttach(url) {
 }
 
 refresh();
-setInterval(refresh, 5000);
+const refreshTimer = setInterval(refresh, 5000);
 </script>
 </body>
 </html>

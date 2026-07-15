@@ -17,3 +17,7 @@ func launchedFromGUI() bool {
 	}
 	return fi.Mode()&os.ModeCharDevice == 0 && os.Getenv("TERM") == ""
 }
+
+// freeConsole is a no-op outside Windows: GUI launches have no terminal
+// window to hide in the first place.
+func freeConsole() {}

@@ -48,8 +48,10 @@ ocm exports the password when starting servers and authenticates with it.
 func Run(args []string) error {
 	if len(args) == 0 {
 		// Double-clicked from a graphical shell: start the dashboard
-		// instead of printing help nobody would see.
+		// instead of printing help nobody would see. The console window
+		// (Windows) is dropped; quit via the dashboard's exit button.
 		if launchedFromGUI() {
+			freeConsole()
 			args = []string{"dashboard"}
 		} else {
 			fmt.Print(usage)
