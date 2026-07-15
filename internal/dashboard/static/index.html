@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ocm</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e2230; --border: #2a2f3d;
+    --fg: #d6d9e0; --dim: #8a90a0; --accent: #6ea8fe; --ok: #3fb950; --err: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 ui-sans-serif, -apple-system, "PingFang SC", sans-serif; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  main { max-width: 680px; margin: 0 auto; padding: 40px 20px; }
+  h1 { font-size: 16px; margin: 0 0 16px; display: flex; align-items: center; }
+  h1 .sub { font-size: 12px; color: var(--dim); font-weight: normal; margin-left: 10px; }
+  .row { display: flex; align-items: center; gap: 12px; background: var(--panel);
+         border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px;
+         margin-bottom: 10px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--err); flex: none; }
+  .dot.ok { background: var(--ok); }
+  .info { flex: 1; min-width: 0; }
+  .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .name .tag { font-size: 11px; color: var(--dim); font-weight: normal; }
+  .link { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .link a { color: var(--accent); text-decoration: none; }
+  .link a:hover { text-decoration: underline; }
+  .link .off { color: var(--dim); }
+  .meta { font-size: 12px; color: var(--dim); flex: none; }
+  .actions { display: flex; gap: 6px; flex: none; }
+  button { background: var(--panel2); color: var(--fg); border: 1px solid var(--border);
+           border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: 13px;
+           white-space: nowrap; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #23406e; border-color: #33507e; }
+  button.danger:hover { border-color: var(--err); color: var(--err); }
+  button:disabled { opacity: .5; cursor: wait; }
+  #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+           background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+           padding: 8px 16px; display: none; z-index: 20; max-width: 90vw; }
+  @media (max-width: 560px) {
+    .row { flex-wrap: wrap; }
+    .info { flex-basis: calc(100% - 60px); }
+    .actions { margin-left: 22px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>opencode 连接<span class="sub" id="updated"></span></h1>
+  <div id="hosts"></div>
+</main>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const busy = new Set();   // keys with an action in flight
+
+function esc(s) { return (s ?? "").toString().replace(/[&<>"]/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function toast(msg, ms = 3000) {
+  const t = $("#toast"); t.textContent = msg; t.style.display = "block";
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", ms);
+}
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+
+async function refresh() {
+  try {
+    const state = await api("/api/state");
+    render(state);
+    $("#updated").textContent = new Date().toLocaleTimeString();
+  } catch (e) { toast("获取状态失败: " + e.message); }
+}
+
+function row(html) {
+  const div = document.createElement("div");
+  div.className = "row";
+  div.innerHTML = html;
+  return div;
+}
+
+// info column: name + tag on line 1, url on line 2
+function info(name, tag, urlHTML) {
+  return `<div class="info">
+    <div class="name">${name}${tag ? ` <span class="tag">${tag}</span>` : ""}</div>
+    <div class="link mono">${urlHTML}</div>
+  </div>`;
+}
+
+function btn(label, cls, key, handler, disabled) {
+  return `<button class="${cls}" ${disabled ? "disabled" : ""} onclick="${handler}">${label}</button>`;
+}
+
+function render(state) {
+  const root = $("#hosts"); root.innerHTML = "";
+  const locals = state.filter(h => h.local);
+  const remotes = state.filter(h => !h.local);
+
+  // Local instances (auto-discovered, random ports).
+  for (const h of locals) {
+    const tag = `${esc(h.command)} · pid ${h.pid}${h.managed ? "" : " · 外部托管"}`;
+    const acting = busy.has("local");
+    const actions = [
+      `<button onclick="copyAttach('${esc(h.url)}')">attach</button>`,
+      h.managed ? `<button ${acting ? "disabled" : ""}
+          onclick="act('/api/local/${h.pid}/restart','local','重启',this)">重启</button>` : "",
+      h.managed ? `<button class="danger" ${acting ? "disabled" : ""}
+          onclick="act('/api/local/${h.pid}/down','local','断开',this)">断开</button>` : "",
+    ].join("");
+    root.appendChild(row(`
+      <span class="dot ok"></span>
+      ${info("local", tag, `<a href="${esc(h.url)}" target="_blank">${esc(h.url)}</a>`)}
+      <span class="meta">v${esc(h.version)}</span>
+      <span class="actions">${actions}</span>`));
+  }
+  if (!locals.some(h => h.managed)) {
+    root.appendChild(row(`
+      <span class="dot"></span>
+      ${info("local", "", `<span class="off">未运行（端口自动分配）</span>`)}
+      <span class="meta">已断开</span>
+      <span class="actions"><button class="primary" ${busy.has("local") ? "disabled" : ""}
+        onclick="act('/api/local/up','local','连接',this)">连接</button></span>`));
+  }
+
+  // Remote hosts.
+  for (const h of remotes) {
+    const acting = busy.has(h.name);
+    const urlHTML = h.healthy
+      ? `<a href="${esc(h.url)}" target="_blank">${esc(h.url)}</a>`
+      : `<span class="off">${esc(h.url)}</span>`;
+    const actions = h.healthy
+      ? `<button onclick="copyAttach('${esc(h.url)}')">attach</button>
+         <button ${acting ? "disabled" : ""}
+           onclick="act('/api/hosts/${esc(h.name)}/restart','${esc(h.name)}','重启',this)">重启</button>
+         <button class="danger" ${acting ? "disabled" : ""}
+           onclick="act('/api/hosts/${esc(h.name)}/down','${esc(h.name)}','断开',this)">断开</button>`
+      : `<button class="primary" ${acting ? "disabled" : ""}
+           onclick="act('/api/hosts/${esc(h.name)}/up','${esc(h.name)}','连接',this)">连接</button>`;
+    root.appendChild(row(`
+      <span class="dot ${h.healthy ? "ok" : ""}"></span>
+      ${info(esc(h.name), "", urlHTML)}
+      <span class="meta">${h.healthy ? "v" + esc(h.version) : "已断开"}</span>
+      <span class="actions">${actions}</span>`));
+  }
+}
+
+async function act(path, key, verb, btn) {
+  busy.add(key);
+  btn.disabled = true;
+  if (verb === "连接") btn.textContent = "连接中…";
+  if (verb === "重启") btn.textContent = "重启中…";
+  try {
+    await api(path, {method: "POST"});
+    toast(`${key} 已${verb}`);
+  } catch (e) {
+    toast(`${key} ${verb}失败: ` + e.message, 6000);
+  }
+  busy.delete(key);
+  refresh();
+}
+
+function copyAttach(url) {
+  const cmd = "opencode attach " + url;
+  navigator.clipboard.writeText(cmd)
+    .then(() => toast("已复制: " + cmd))
+    .catch(() => toast(cmd, 8000));
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

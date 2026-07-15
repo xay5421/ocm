@@ -1,0 +1,9 @@
+# Compiled binaries
+ocm
+ocm.exe
+*.exe
+
+# Go build/test artifacts
+*.test
+*.out
+dist/
