@@ -7,3 +7,4 @@ ocm.exe
 *.test
 *.out
 dist/
+*.exe~
