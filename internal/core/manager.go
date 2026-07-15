@@ -2,7 +2,10 @@ package core
 
 import (
 	"fmt"
+	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -40,25 +43,84 @@ func TunnelPID(h config.Host) (int, bool) {
 
 // StartTunnel starts a background ssh tunnel for h. It is a no-op if one is
 // already running.
+//
+// ssh's own -f (daemonize after auth) is deliberately not used: Windows
+// OpenSSH never actually detaches with -f, so reading the command's output
+// would block forever. Instead a plain `ssh -N` is started fully detached,
+// with its output going to a log file, and ocm polls until the forwarded
+// local port accepts connections.
 func (m *Manager) StartTunnel(h config.Host) error {
 	if _, ok := TunnelPID(h); ok {
 		return nil
 	}
 	m.logf("starting ssh tunnel 127.0.0.1:%d -> %s:%d", h.LocalPort, h.SSH, h.RemotePort)
-	cmd := hideWindow(exec.Command("ssh",
-		"-f", "-N",
+	logPath := tunnelLogPath(h)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+	// BatchMode: a detached ssh has no terminal to prompt on, so interactive
+	// auth would hang silently; fail with a clear error instead.
+	cmd := exec.Command("ssh",
+		"-N",
 		"-o", "ExitOnForwardFailure=yes",
+		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10",
 		"-o", "ServerAliveInterval=30",
 		"-o", "ServerAliveCountMax=3",
 		"-L", fmt.Sprintf("%d:127.0.0.1:%d", h.LocalPort, h.RemotePort),
 		h.SSH,
-	))
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("ssh tunnel to %s failed: %v: %s", h.SSH, err, strings.TrimSpace(string(out)))
+	)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.SysProcAttr = detachSysProcAttr()
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start ssh: %w", err)
 	}
-	return nil
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		select {
+		case <-exited:
+			return fmt.Errorf("ssh tunnel to %s failed: %s", h.SSH, tailOfFile(logPath))
+		default:
+		}
+		// The local forward port starts accepting once ssh has connected,
+		// authenticated, and bound the forwarding listener.
+		if conn, err := net.DialTimeout("tcp",
+			fmt.Sprintf("127.0.0.1:%d", h.LocalPort), time.Second); err == nil {
+			conn.Close()
+			return nil
+		}
+		if time.Now().After(deadline) {
+			_ = cmd.Process.Kill()
+			return fmt.Errorf("ssh tunnel to %s did not come up within 30s: %s",
+				h.SSH, tailOfFile(logPath))
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
+// tunnelLogPath is where the ssh tunnel for h writes its output.
+func tunnelLogPath(h config.Host) string {
+	return filepath.Join(os.TempDir(), fmt.Sprintf("ocm-tunnel-%d.log", h.LocalPort))
+}
+
+// tailOfFile returns the (trimmed) tail of a small log file for error
+// messages, or a placeholder if it is empty or unreadable.
+func tailOfFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil || len(strings.TrimSpace(string(data))) == 0 {
+		return "(no ssh output, see " + path + ")"
+	}
+	s := strings.TrimSpace(string(data))
+	if len(s) > 500 {
+		s = "..." + s[len(s)-500:]
+	}
+	return s
 }
 
 // StopTunnel kills the ssh tunnel for h if running.
@@ -79,13 +141,23 @@ func (m *Manager) StartServe(h config.Host) error {
 	// remote command line / in remote `ps` output. The health pre-check
 	// treats 200 (healthy) and 401 (running, password-protected) both as
 	// "already running", so it needs no credentials.
+	// h.Opencode is validated at config load time to contain only safe
+	// characters; the $HOME prefix replaces ~ for expansion inside quotes.
+	servePath := h.Opencode
+	servePath = strings.TrimSpace(servePath)
+	if strings.HasPrefix(servePath, "~/") {
+		servePath = "$HOME/" + servePath[2:]
+	} else if servePath == "~" {
+		servePath = "$HOME"
+	}
+	servePath = `"` + servePath + `"`
 	serveCmd := fmt.Sprintf(
 		`IFS= read -r OCM_PW; `+
 			`code=$(curl -s -o /dev/null -m 2 -w '%%{http_code}' http://127.0.0.1:%d/global/health 2>/dev/null); `+
 			`if [ "$code" != 200 ] && [ "$code" != 401 ]; then `+
 			`if [ -n "$OCM_PW" ]; then export OPENCODE_SERVER_PASSWORD="$OCM_PW"; fi; `+
 			`nohup %s serve --port %d --hostname 127.0.0.1 >>"$HOME/.opencode-serve.log" 2>&1 </dev/null & fi`,
-		h.RemotePort, h.Opencode, h.RemotePort)
+		h.RemotePort, servePath, h.RemotePort)
 	m.logf("starting opencode serve on %s (port %d)", h.SSH, h.RemotePort)
 	cmd := hideWindow(exec.Command("ssh",
 		"-o", "ConnectTimeout=10",
