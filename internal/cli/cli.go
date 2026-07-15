@@ -33,6 +33,8 @@ Usage:
   ocm dashboard [--port N] [--up]   Start the local web dashboard (default port 4800)
   ocm config                        Print config file path and contents
 
+Double-clicking the ocm binary in a graphical shell starts the dashboard.
+
 Hosts are defined in ~/.config/ocm/config.json (override with $OCM_CONFIG).
 Extra args after <host> are passed through to 'opencode attach' / 'opencode run'.
 
@@ -45,8 +47,14 @@ ocm exports the password when starting servers and authenticates with it.
 // Run executes the CLI.
 func Run(args []string) error {
 	if len(args) == 0 {
-		fmt.Print(usage)
-		return nil
+		// Double-clicked from a graphical shell: start the dashboard
+		// instead of printing help nobody would see.
+		if launchedFromGUI() {
+			args = []string{"dashboard"}
+		} else {
+			fmt.Print(usage)
+			return nil
+		}
 	}
 	cmd, rest := args[0], args[1:]
 

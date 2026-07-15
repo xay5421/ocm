@@ -158,6 +158,19 @@ The dashboard shows every host (including auto-discovered local instances)
 with health, version, and up/down/restart buttons. It binds to `127.0.0.1`
 only.
 
+You can also start the dashboard by **double-clicking the ocm binary**:
+
+- **Windows**: double-click `ocm.exe` in Explorer — ocm detects the GUI
+  launch and starts the dashboard (closing the console window stops it).
+- **Linux**: double-click / "Run" the binary in a file manager — detected via
+  the missing terminal.
+- **macOS**: Finder runs command-line binaries inside a Terminal window, so a
+  double-click shows the help text instead; run `ocm dashboard` there, or
+  create a `ocm-dashboard.command` file containing `ocm dashboard` and
+  double-click that.
+
+Running `ocm` without arguments in a terminal still prints the help text.
+
 ## How it works
 
 `ocm up <host>`:
