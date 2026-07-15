@@ -98,7 +98,8 @@ ocm restart <host>                Restart the remote server (e.g. after config c
 ocm up local                      Start a local opencode serve (fixed port 14000)
 ocm down local [pid]              Stop a discovered local server
 ocm restart local [pid]           Restart a local server (fixed port 14000)
-ocm dashboard [--port N] [--up]   Start the local web dashboard (default port 4800)
+ocm dashboard [--port N] [--up] [--exit-on-idle]
+                                  Start the local web dashboard (default port 4800)
 ocm config                        Print config file path and contents
 ```
 
@@ -148,10 +149,11 @@ at file mode `0600`.
 ## Dashboard
 
 ```sh
-ocm dashboard              # http://127.0.0.1:4800, opens your browser
-ocm dashboard --up         # also bring all configured hosts up first
-ocm dashboard --port 4900  # custom port
-ocm dashboard --no-open    # don't open the browser
+ocm dashboard                 # http://127.0.0.1:4800, opens your browser
+ocm dashboard --up            # also bring all configured hosts up first
+ocm dashboard --port 4900     # custom port
+ocm dashboard --no-open       # don't open the browser
+ocm dashboard --exit-on-idle  # exit once all dashboard pages are closed
 ```
 
 The dashboard shows every host (including auto-discovered local instances)
@@ -162,7 +164,9 @@ You can also start the dashboard by **double-clicking the ocm binary**:
 
 - **Windows**: double-click `ocm.exe` in Explorer — ocm detects the GUI
   launch, detaches from its console (the window closes by itself), and runs
-  the dashboard in the background. Use the dashboard's quit button to stop it.
+  the dashboard in the background with `--exit-on-idle`: once you close the
+  last dashboard page, the process exits by itself about a minute later. The
+  dashboard's quit button stops it immediately.
 - **Linux**: double-click / "Run" the binary in a file manager — detected via
   the missing terminal.
 - **macOS**: Finder runs command-line binaries inside a Terminal window, so a

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/xay5421/ocm/internal/core"
@@ -23,6 +24,12 @@ var staticFS embed.FS
 // Server is the dashboard HTTP server.
 type Server struct {
 	Manager *core.Manager
+	// ExitOnIdle, when > 0, makes the process exit after no browser page
+	// has been connected (via /api/events) for this long. Used for GUI
+	// launches, where there is no terminal to Ctrl-C.
+	ExitOnIdle time.Duration
+
+	watchers atomic.Int64 // open /api/events connections
 }
 
 // New creates a dashboard server.
@@ -45,7 +52,63 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/local/{pid}/down", s.handleLocalDown)
 	mux.HandleFunc("POST /api/local/{pid}/restart", s.handleLocalRestart)
 	mux.HandleFunc("POST /api/quit", s.handleQuit)
+	mux.HandleFunc("GET /api/events", s.handleEvents)
 	return mux
+}
+
+// handleEvents is a server-sent-events stream the page keeps open as a
+// liveness signal (and reconnects automatically). Browsers throttle timers in
+// background tabs but keep established connections, so this is more reliable
+// than a polling heartbeat for detecting "no page open anymore".
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, 500, fmt.Errorf("streaming unsupported"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	s.watchers.Add(1)
+	defer s.watchers.Add(-1)
+	fmt.Fprint(w, ": connected\n\n")
+	fl.Flush()
+	tick := time.NewTicker(15 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-tick.C:
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
+			fl.Flush()
+		}
+	}
+}
+
+// idleWatch exits the process once no page has been connected for
+// s.ExitOnIdle. The countdown also runs from startup, so a dashboard whose
+// browser never opened cleans itself up too.
+func (s *Server) idleWatch(ctx context.Context) {
+	idleSince := time.Now()
+	tick := time.NewTicker(5 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			if s.watchers.Load() > 0 {
+				idleSince = time.Now()
+				continue
+			}
+			if time.Since(idleSince) >= s.ExitOnIdle {
+				fmt.Fprintf(os.Stderr, "ocm: dashboard idle for %s, exiting\n", s.ExitOnIdle)
+				os.Exit(0)
+			}
+		}
+	}
 }
 
 // handleQuit exits the ocm process. It exists so the dashboard can be closed
@@ -61,6 +124,9 @@ func (s *Server) handleQuit(w http.ResponseWriter, r *http.Request) {
 
 // Serve blocks serving HTTP on addr until ctx is cancelled.
 func (s *Server) Serve(ctx context.Context, addr string) error {
+	if s.ExitOnIdle > 0 {
+		go s.idleWatch(ctx)
+	}
 	srv := &http.Server{Addr: addr, Handler: s.Handler()}
 	go func() {
 		<-ctx.Done()

@@ -62,6 +62,11 @@
 const $ = s => document.querySelector(s);
 const busy = new Set();   // keys with an action in flight
 
+// Liveness stream: while any page holds this connection, a dashboard started
+// with --exit-on-idle (e.g. by double-click) stays alive; when all pages are
+// closed it exits after the idle timeout. EventSource reconnects on its own.
+const events = new EventSource("/api/events");
+
 function esc(s) { return (s ?? "").toString().replace(/[&<>"]/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 function toast(msg, ms = 3000) {
@@ -173,6 +178,7 @@ async function act(path, key, verb, btn) {
 async function quitOcm() {
   if (!confirm("退出 ocm dashboard？隧道和 opencode 服务器会继续运行。")) return;
   clearInterval(refreshTimer);
+  events.close();
   try { await api("/api/quit", {method: "POST"}); } catch (e) {}
   document.body.innerHTML =
     '<main><h1>ocm dashboard 已退出</h1><p style="color:var(--dim)">可以关闭此页面。</p></main>';

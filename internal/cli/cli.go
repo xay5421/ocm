@@ -30,7 +30,9 @@ Usage:
   ocm up local                      Start a local opencode serve (fixed port 14000)
   ocm down local [pid]              Stop a discovered local server
   ocm restart local [pid]           Restart a local server (fixed port 14000)
-  ocm dashboard [--port N] [--up]   Start the local web dashboard (default port 4800)
+  ocm dashboard [--port N] [--up] [--exit-on-idle]
+                                    Start the local web dashboard (default port 4800;
+                                    --exit-on-idle quits when all pages are closed)
   ocm config                        Print config file path and contents
 
 Double-clicking the ocm binary in a graphical shell starts the dashboard.
@@ -52,7 +54,9 @@ func Run(args []string) error {
 		// (Windows) is dropped; quit via the dashboard's exit button.
 		if launchedFromGUI() {
 			freeConsole()
-			args = []string{"dashboard"}
+			// --exit-on-idle: without a terminal nobody could stop the
+			// process, so it exits once all dashboard pages are closed.
+			args = []string{"dashboard", "--exit-on-idle"}
 		} else {
 			fmt.Print(usage)
 			return nil
@@ -363,6 +367,7 @@ func cmdDashboard(m *core.Manager, args []string) error {
 	port := 4800
 	up, args := hasFlag(args, "--up")
 	noOpen, args := hasFlag(args, "--no-open")
+	exitOnIdle, args := hasFlag(args, "--exit-on-idle")
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--port" && i+1 < len(args) {
 			fmt.Sscanf(args[i+1], "%d", &port)
@@ -386,7 +391,11 @@ func cmdDashboard(m *core.Manager, args []string) error {
 			openBrowser(url)
 		}()
 	}
-	return dashboard.New(m).Serve(context.Background(), addr)
+	srv := dashboard.New(m)
+	if exitOnIdle {
+		srv.ExitOnIdle = time.Minute
+	}
+	return srv.Serve(context.Background(), addr)
 }
 
 // openBrowser opens url in the default browser, best effort.
