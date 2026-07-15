@@ -12,9 +12,9 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"ocm/internal/config"
-	"ocm/internal/core"
-	"ocm/internal/dashboard"
+	"github.com/xay5421/ocm/internal/config"
+	"github.com/xay5421/ocm/internal/core"
+	"github.com/xay5421/ocm/internal/dashboard"
 )
 
 const usage = `ocm - opencode connection manager

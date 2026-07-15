@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"time"
 
-	"ocm/internal/core"
+	"github.com/xay5421/ocm/internal/core"
 )
 
 //go:embed static

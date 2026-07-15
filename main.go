@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"ocm/internal/cli"
+	"github.com/xay5421/ocm/internal/cli"
 )
 
 func main() {

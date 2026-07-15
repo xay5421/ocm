@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"ocm/internal/config"
+	"github.com/xay5421/ocm/internal/config"
 )
 
 // Manager orchestrates tunnels and remote opencode servers for a set of hosts.
