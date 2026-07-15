@@ -31,7 +31,7 @@ remote machines and reconnect from anywhere.
 - `ssh` available locally, with the remote hosts reachable non-interactively
   (key-based auth; an alias in `~/.ssh/config` is recommended)
 - `curl` on the remote hosts (used for the health pre-check)
-- Go 1.26+ (only to build from source)
+- Go 1.24+ (only to build from source)
 
 ## Install
 

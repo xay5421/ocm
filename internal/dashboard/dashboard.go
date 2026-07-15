@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -41,19 +42,46 @@ func New(m *core.Manager) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	static, _ := fs.Sub(staticFS, "static")
+	static, err := fs.Sub(staticFS, "static")
+	if err != nil {
+		panic("embedded static directory missing: " + err.Error())
+	}
 	mux.Handle("GET /", http.FileServer(http.FS(static)))
 
 	mux.HandleFunc("GET /api/state", s.handleState)
-	mux.HandleFunc("POST /api/hosts/{name}/up", s.handleUp)
-	mux.HandleFunc("POST /api/hosts/{name}/down", s.handleDown)
-	mux.HandleFunc("POST /api/hosts/{name}/restart", s.handleRestart)
-	mux.HandleFunc("POST /api/local/up", s.handleLocalUp)
-	mux.HandleFunc("POST /api/local/{pid}/down", s.handleLocalDown)
-	mux.HandleFunc("POST /api/local/{pid}/restart", s.handleLocalRestart)
-	mux.HandleFunc("POST /api/quit", s.handleQuit)
+	mux.HandleFunc("POST /api/hosts/{name}/up", s.requireOrigin(s.handleUp))
+	mux.HandleFunc("POST /api/hosts/{name}/down", s.requireOrigin(s.handleDown))
+	mux.HandleFunc("POST /api/hosts/{name}/restart", s.requireOrigin(s.handleRestart))
+	mux.HandleFunc("POST /api/local/up", s.requireOrigin(s.handleLocalUp))
+	mux.HandleFunc("POST /api/local/{pid}/down", s.requireOrigin(s.handleLocalDown))
+	mux.HandleFunc("POST /api/local/{pid}/restart", s.requireOrigin(s.handleLocalRestart))
+	mux.HandleFunc("POST /api/quit", s.requireOrigin(s.handleQuit))
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	return mux
+}
+
+// requireOrigin wraps a handler to reject cross-origin POST requests. Since
+// the dashboard binds to 127.0.0.1, only same-origin requests (or requests
+// without an Origin header, such as curl) are allowed. This prevents a
+// malicious website from CSRF-ing the dashboard and bringing down tunnels.
+func (s *Server) requireOrigin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			next(w, r)
+			return
+		}
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			next(w, r)
+			return
+		}
+		if strings.HasPrefix(origin, "http://127.0.0.1:") ||
+			strings.HasPrefix(origin, "http://localhost:") {
+			next(w, r)
+			return
+		}
+		writeErr(w, http.StatusForbidden, fmt.Errorf("cross-origin requests are not allowed"))
+	}
 }
 
 // handleEvents is a server-sent-events stream the page keeps open as a
@@ -127,7 +155,16 @@ func (s *Server) Serve(ctx context.Context, addr string) error {
 	if s.ExitOnIdle > 0 {
 		go s.idleWatch(ctx)
 	}
-	srv := &http.Server{Addr: addr, Handler: s.Handler()}
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: s.Handler(),
+		// No WriteTimeout: /api/events is a long-lived SSE stream, and
+		// actions like "up" legitimately take up to a minute (ssh tunnel +
+		// remote server start). ReadHeaderTimeout still guards the accept
+		// path; the server binds to 127.0.0.1 only.
+		ReadTimeout: 10 * time.Second,
+		IdleTimeout: 60 * time.Second,
+	}
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

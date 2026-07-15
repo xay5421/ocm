@@ -180,16 +180,21 @@ func (m *Manager) StartLocalServe() (HostState, error) {
 		return HostState{}, fmt.Errorf("start local serve: %w", err)
 	}
 	pid := cmd.Process.Pid
-	go cmd.Wait() // reap when it eventually exits
 
 	deadline := time.Now().Add(30 * time.Second)
 	c := NewClient(url, password)
 	for {
 		if v, ok := c.Health(); ok {
+			// Server is healthy: detach the OS process handle so the
+			// child outlives us; no Wait needed since it is detached.
+			_ = cmd.Process.Release()
 			return HostState{Name: "local", Local: true, URL: url, Healthy: true,
 				Version: v, Command: "opencode", Managed: true, PID: pid}, nil
 		}
 		if time.Now().After(deadline) {
+			// Health check timed out: kill and reap the child.
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
 			return HostState{}, fmt.Errorf("local serve on port %d did not become healthy (check ~/.opencode-serve.log)", port)
 		}
 		time.Sleep(300 * time.Millisecond)

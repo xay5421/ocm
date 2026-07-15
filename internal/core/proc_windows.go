@@ -125,10 +125,13 @@ func killProcess(pid int) error {
 // findSSHTunnelPID returns the pid of the ssh process whose command line
 // contains "-L <pattern>", if any.
 func findSSHTunnelPID(pattern string) (int, bool) {
+	// Pattern may contain user-provided SSH hostnames; escape single quotes
+	// for PowerShell's single-quoted string syntax ('' represents one ').
+	safe := strings.ReplaceAll(pattern, "'", "''")
 	query := fmt.Sprintf(
 		`Get-CimInstance Win32_Process -Filter "Name='ssh.exe'" | `+
 			`Where-Object { $_.CommandLine -like '*-L *%s*' } | `+
-			`Select-Object -First 1 -ExpandProperty ProcessId`, pattern)
+			`Select-Object -First 1 -ExpandProperty ProcessId`, safe)
 	out, err := hideWindow(exec.Command("powershell",
 		"-NoProfile", "-NonInteractive", "-Command", query)).Output()
 	if err != nil {

@@ -102,7 +102,7 @@ func Run(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Print(string(data))
+		fmt.Print(config.SafeMarshal(data))
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", cmd, usage)

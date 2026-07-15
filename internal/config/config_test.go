@@ -24,8 +24,8 @@ func TestDefaultPasswordPropagation(t *testing.T) {
 	cfg := loadFrom(t, `{
 		"password": "global",
 		"hosts": {
-			"a": {"ssh": "a", "remote_port": 1, "local_port": 2},
-			"b": {"ssh": "b", "remote_port": 1, "local_port": 3, "password": "own"}
+			"a": {"ssh": "a", "remote_port": 1, "local_port": 2, "opencode": "~/.opencode/bin/opencode"},
+			"b": {"ssh": "b", "remote_port": 1, "local_port": 3, "opencode": "~/.opencode/bin/opencode", "password": "own"}
 		}
 	}`)
 	if got := cfg.Hosts["a"].Password; got != "global" {
@@ -47,7 +47,7 @@ func TestLocalPasswordOverridesDefault(t *testing.T) {
 }
 
 func TestNoDefaultPassword(t *testing.T) {
-	cfg := loadFrom(t, `{"hosts": {"a": {"ssh": "a", "remote_port": 1, "local_port": 2}}}`)
+	cfg := loadFrom(t, `{"hosts": {"a": {"ssh": "a", "remote_port": 1, "local_port": 2, "opencode": "~/.opencode/bin/opencode"}}}`)
 	if got := cfg.Hosts["a"].Password; got != "" {
 		t.Errorf("host a: password = %q, want empty", got)
 	}

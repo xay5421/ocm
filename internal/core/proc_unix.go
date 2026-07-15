@@ -4,6 +4,7 @@ package core
 
 import (
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -84,7 +85,9 @@ func killProcess(pid int) error {
 // findSSHTunnelPID returns the pid of the ssh process whose command line
 // contains "-L <pattern>", if any.
 func findSSHTunnelPID(pattern string) (int, bool) {
-	out, err := exec.Command("pgrep", "-f", "ssh.*-L "+pattern).Output()
+	// Quote regex metacharacters so that SSH hostnames containing dots or
+	// other regex-special characters are matched literally.
+	out, err := exec.Command("pgrep", "-f", "ssh.*-L "+regexp.QuoteMeta(pattern)).Output()
 	if err != nil {
 		return 0, false
 	}

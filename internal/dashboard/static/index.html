@@ -67,8 +67,8 @@ const busy = new Set();   // keys with an action in flight
 // closed it exits after the idle timeout. EventSource reconnects on its own.
 const events = new EventSource("/api/events");
 
-function esc(s) { return (s ?? "").toString().replace(/[&<>"]/g,
-  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function esc(s) { return (s ?? "").toString().replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function toast(msg, ms = 3000) {
   const t = $("#toast"); t.textContent = msg; t.style.display = "block";
   clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", ms);

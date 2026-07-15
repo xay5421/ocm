@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -40,6 +41,15 @@ type Config struct {
 	// LocalPassword protects local servers started by ocm with HTTP basic
 	// auth (optional), and is used when probing/attaching to local servers.
 	LocalPassword string `json:"local_password,omitempty"`
+}
+
+var validOpencodeRe = regexp.MustCompile(`^[a-zA-Z0-9._/~ -]+$`)
+
+// ValidOpencode reports whether s is safe to use as a remote opencode binary
+// path in a shell command. The path may start with ~ and contain spaces (e.g.
+// for wrapper scripts with arguments), but shell metacharacters are rejected.
+func ValidOpencode(s string) bool {
+	return validOpencodeRe.MatchString(s)
 }
 
 // Names returns host names sorted alphabetically.
@@ -152,6 +162,13 @@ func Load() (*Config, error) {
 			fmt.Fprintf(os.Stderr, "ocm: removed legacy local host entry from %s (local servers are auto-discovered now)\n", p)
 		}
 	}
+	// Reject hosts whose opencode path contains shell metacharacters; the
+	// path is used inside a remote shell command over SSH.
+	for name, h := range cfg.Hosts {
+		if !ValidOpencode(h.Opencode) {
+			return nil, fmt.Errorf("host %q: opencode path %q contains unsafe characters; only letters, digits, ., /, _, ~, -, and spaces are allowed", name, h.Opencode)
+		}
+	}
 	cfg.applyDefaultPassword()
 	return &cfg, nil
 }
@@ -172,4 +189,39 @@ func Save(cfg *Config) error {
 	}
 	// WriteFile only applies the mode on creation; tighten pre-existing files.
 	return os.Chmod(p, 0o600)
+}
+
+// SafeMarshal returns a copy of raw config JSON data with password fields
+// redacted. It is used by the "ocm config" command so that passwords are
+// never printed to the terminal, even accidentally.
+func SafeMarshal(raw []byte) string {
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return string(raw)
+	}
+	maskPasswords(cfg)
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return string(raw)
+	}
+	return string(out)
+}
+
+func maskPasswords(v any) {
+	switch vv := v.(type) {
+	case map[string]any:
+		for k, val := range vv {
+			if (k == "password" || k == "local_password") && val != nil {
+				if s, ok := val.(string); ok && s != "" {
+					vv[k] = "***"
+				}
+				continue
+			}
+			maskPasswords(val)
+		}
+	case []any:
+		for _, item := range vv {
+			maskPasswords(item)
+		}
+	}
 }
