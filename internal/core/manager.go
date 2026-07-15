@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -159,12 +160,20 @@ func (m *Manager) StartServe(h config.Host) error {
 			`nohup %s serve --port %d --hostname 127.0.0.1 >>"$HOME/.opencode-serve.log" 2>&1 </dev/null & fi`,
 		h.RemotePort, servePath, h.RemotePort)
 	m.logf("starting opencode serve on %s (port %d)", h.SSH, h.RemotePort)
-	cmd := hideWindow(exec.Command("ssh",
+	// Hard deadline: a wedged remote host can hang an ssh session forever
+	// (past ConnectTimeout, which only covers the TCP connect), which would
+	// in turn hang whoever called Up (CLI command or dashboard request).
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := hideWindow(exec.CommandContext(ctx, "ssh",
 		"-o", "ConnectTimeout=10",
 		"-o", "BatchMode=yes",
 		h.SSH, serveCmd))
 	cmd.Stdin = strings.NewReader(h.Password + "\n")
 	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return fmt.Errorf("start serve on %s timed out after 60s", h.SSH)
+	}
 	if err != nil {
 		return fmt.Errorf("start serve failed: %v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -177,7 +186,14 @@ func (m *Manager) StopServe(h config.Host) error {
 	// runs this very pkill command.
 	killCmd := fmt.Sprintf(`pkill -f "[o]pencode serve --port %d" || true`, h.RemotePort)
 	m.logf("stopping opencode serve on %s", h.SSH)
-	return hideWindow(exec.Command("ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes", h.SSH, killCmd)).Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	err := hideWindow(exec.CommandContext(ctx, "ssh",
+		"-o", "ConnectTimeout=10", "-o", "BatchMode=yes", h.SSH, killCmd)).Run()
+	if ctx.Err() != nil {
+		return fmt.Errorf("stop serve on %s timed out after 30s", h.SSH)
+	}
+	return err
 }
 
 // Down disconnects a remote host: the tunnel is stopped and the remote server
