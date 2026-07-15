@@ -1,5 +1,7 @@
 # ocm
 
+<img src="internal/dashboard/static/favicon.svg" width="64" align="right" alt="ocm logo">
+
 `ocm` (opencode connection manager) manages [opencode](https://opencode.ai)
 servers across machines: it starts `opencode serve` on remote hosts over SSH,
 keeps SSH tunnels to them alive, auto-discovers local instances, and attaches
