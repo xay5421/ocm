@@ -33,6 +33,10 @@ type Host struct {
 // Config is the on-disk ocm configuration.
 type Config struct {
 	Hosts map[string]Host `json:"hosts"`
+	// Password is the default password for every server (optional). A
+	// host's own "password" field and "local_password" override it.
+	// Load propagates it in memory; it is never copied back to disk.
+	Password string `json:"password,omitempty"`
 	// LocalPassword protects local servers started by ocm with HTTP basic
 	// auth (optional), and is used when probing/attaching to local servers.
 	LocalPassword string `json:"local_password,omitempty"`
@@ -94,6 +98,24 @@ func Default() *Config {
 	}
 }
 
+// applyDefaultPassword fills empty per-host and local passwords with the
+// top-level default. In-memory only: Save must not run after this, or the
+// propagated copies would be written to disk.
+func (c *Config) applyDefaultPassword() {
+	if c.Password == "" {
+		return
+	}
+	for name, h := range c.Hosts {
+		if h.Password == "" {
+			h.Password = c.Password
+			c.Hosts[name] = h
+		}
+	}
+	if c.LocalPassword == "" {
+		c.LocalPassword = c.Password
+	}
+}
+
 // Load reads the config file, creating it with defaults if missing.
 func Load() (*Config, error) {
 	p := Path()
@@ -130,6 +152,7 @@ func Load() (*Config, error) {
 			fmt.Fprintf(os.Stderr, "ocm: removed legacy local host entry from %s (local servers are auto-discovered now)\n", p)
 		}
 	}
+	cfg.applyDefaultPassword()
 	return &cfg, nil
 }
 

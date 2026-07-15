@@ -41,8 +41,9 @@ Hosts are defined in ~/.config/ocm/config.json (override with $OCM_CONFIG).
 Extra args after <host> are passed through to 'opencode attach' / 'opencode run'.
 
 Server passwords (HTTP basic auth, opencode's OPENCODE_SERVER_PASSWORD):
-  per-host  "password" field        protects that remote server
-  top-level "local_password" field  protects local servers started by ocm
+  top-level "password" field        default password for all servers
+  per-host  "password" field        protects that remote server (overrides default)
+  top-level "local_password" field  protects local servers started by ocm (overrides default)
 ocm exports the password when starting servers and authenticates with it.
 `
 

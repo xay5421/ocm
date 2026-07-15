@@ -128,18 +128,22 @@ The config lives at `~/.config/ocm/config.json` (override with the
 | `local_port`  | yes      | Local port the SSH tunnel binds to (must be unique per host)        |
 | `opencode`    | yes      | Path of the opencode binary on the remote machine                   |
 | `dir`         | no       | Default remote working directory for `ocm connect`                  |
-| `password`    | no       | HTTP basic auth password protecting that remote server              |
+| `password`    | no       | Password for that remote server (overrides the global default)      |
 
 Top-level fields:
 
-| Field            | Description                                              |
-| ---------------- | -------------------------------------------------------- |
-| `hosts`          | Map of host name → host entry                             |
-| `local_password` | Password protecting local servers started by ocm          |
+| Field            | Description                                                       |
+| ---------------- | ----------------------------------------------------------------- |
+| `hosts`          | Map of host name → host entry                                      |
+| `password`       | Global default password for all servers (remote and local)         |
+| `local_password` | Password for local servers started by ocm (overrides the default)   |
 
 ### Passwords
 
-If a `password` (or `local_password`) is set, ocm exports it as
+A top-level `password` acts as the default for every server; a host's own
+`password` field and `local_password` take precedence where set.
+
+If a password applies to a server, ocm exports it as
 `OPENCODE_SERVER_PASSWORD` when starting the server, and uses it to
 authenticate health checks, session listings, and the attached TUI. The
 password is passed to the remote process via stdin so it never appears on the
