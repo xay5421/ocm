@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -70,7 +71,27 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
 	mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
 	mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
-	return mux
+	return requireLoopbackHost(mux)
+}
+
+// requireLoopbackHost rejects requests whose Host header is not a loopback
+// name. The server only ever binds to 127.0.0.1, but a DNS-rebinding attack
+// (an attacker domain resolving to 127.0.0.1) would still arrive over
+// loopback - with the attacker's domain in the Host header, which is what
+// this check catches.
+func requireLoopbackHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		switch host {
+		case "127.0.0.1", "localhost", "::1", "[::1]":
+			next.ServeHTTP(w, r)
+		default:
+			writeErr(w, http.StatusForbidden, fmt.Errorf("forbidden host %q", host))
+		}
+	})
 }
 
 // requireOrigin wraps a handler to reject cross-origin POST requests. Since

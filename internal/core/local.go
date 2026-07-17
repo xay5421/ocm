@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,6 +26,7 @@ type LocalInstance struct {
 	Port    int    `json:"port"`
 	Command string `json:"command"` // process name, e.g. "opencode" or "Code Helper (Plugin)"
 	Managed bool   `json:"managed"` // true if ocm may stop it (dedicated opencode process)
+	Version string `json:"version"` // server version reported by the health probe
 }
 
 // portCandidate is a local TCP listener found by the platform-specific
@@ -34,47 +37,66 @@ type portCandidate struct {
 	command string
 }
 
-// DiscoverLocalInstances finds opencode servers on this machine: every local
-// listening TCP port (except ssh, whose forwards would proxy to remote
-// servers) is health-probed to see whether an opencode server answers.
-// password is used for the probe; unprotected servers ignore it.
-func DiscoverLocalInstances(password string) []LocalInstance {
-	var candidates []portCandidate
+// localCandidates returns the local TCP listeners that could host an
+// opencode server. ssh listeners are excluded: they are tunnels/SOCKS
+// proxies, so a health probe would hit a *remote* server through them.
+func localCandidates() []portCandidate {
+	var out []portCandidate
 	for _, cand := range listeningCandidates() {
-		// ssh listeners are tunnels/SOCKS proxies: a health probe would hit
-		// a *remote* server through them, so they are never local instances.
 		if cand.command == "ssh" || cand.command == "sshd" {
 			continue
 		}
-		candidates = append(candidates, cand)
+		out = append(out, cand)
 	}
+	return out
+}
 
-	// Probe all candidates concurrently; keep the ones that answer like an
-	// opencode server.
+// probeInstance health-checks one local listener and returns it as a
+// LocalInstance if an opencode server answers. The first probe is sent
+// without credentials so the password is never disclosed to arbitrary local
+// processes; only a server that answers 401 (i.e. a password-protected
+// opencode server) is re-probed with auth.
+func probeInstance(cand portCandidate, password string) (LocalInstance, bool) {
+	url := localURL(cand.port)
+	version, status, ok := NewClient(url, "").health()
+	if !ok {
+		if status != http.StatusUnauthorized || password == "" {
+			return LocalInstance{}, false
+		}
+		if version, _, ok = NewClient(url, password).health(); !ok {
+			return LocalInstance{}, false
+		}
+	}
+	command := procName(cand.pid)
+	if command == "" {
+		command = cand.command
+	}
+	return LocalInstance{
+		PID:     cand.pid,
+		Port:    cand.port,
+		Command: command,
+		Managed: strings.Contains(strings.ToLower(command), "opencode"),
+		Version: version,
+	}, true
+}
+
+// DiscoverLocalInstances finds opencode servers on this machine by
+// health-probing every local listening TCP port (except ssh). password is
+// used only for servers that demand auth; see probeInstance.
+func DiscoverLocalInstances(password string) []LocalInstance {
+	candidates := localCandidates()
 	results := make([]*LocalInstance, len(candidates))
-	done := make(chan struct{}, len(candidates))
+	var wg sync.WaitGroup
 	for i, cand := range candidates {
+		wg.Add(1)
 		go func(i int, cand portCandidate) {
-			defer func() { done <- struct{}{} }()
-			c := NewClient(fmt.Sprintf("http://127.0.0.1:%d", cand.port), password)
-			if _, ok := c.Health(); !ok {
-				return
-			}
-			command := procName(cand.pid)
-			if command == "" {
-				command = cand.command
-			}
-			results[i] = &LocalInstance{
-				PID:     cand.pid,
-				Port:    cand.port,
-				Command: command,
-				Managed: strings.Contains(strings.ToLower(command), "opencode"),
+			defer wg.Done()
+			if inst, ok := probeInstance(cand, password); ok {
+				results[i] = &inst
 			}
 		}(i, cand)
 	}
-	for range candidates {
-		<-done
-	}
+	wg.Wait()
 	var instances []LocalInstance
 	for _, r := range results {
 		if r != nil {
@@ -139,17 +161,20 @@ func (m *Manager) StartLocalServe() (HostState, error) {
 	}
 	port := localServePort
 	password := m.Config.LocalPassword
-	url := fmt.Sprintf("http://127.0.0.1:%d", port)
-	for _, inst := range DiscoverLocalInstances(password) {
-		if inst.Port == port {
-			c := NewClient(url, password)
-			version, ok := c.Health()
-			if !ok {
-				break
-			}
-			return HostState{Name: "local", Local: true, URL: url, Healthy: true,
-				Version: version, Command: inst.Command, Managed: inst.Managed, PID: inst.PID}, nil
+	url := localURL(port)
+	// If an opencode server already listens on the fixed port, adopt it. Only
+	// that port is probed; a full DiscoverLocalInstances scan would probe
+	// every local listener just to answer a question about one port.
+	for _, cand := range localCandidates() {
+		if cand.port != port {
+			continue
 		}
+		inst, ok := probeInstance(cand, password)
+		if !ok {
+			break // port taken by something else; reported below
+		}
+		return HostState{Name: "local", Local: true, URL: url, Healthy: true,
+			Version: inst.Version, Command: inst.Command, Managed: inst.Managed, PID: inst.PID}, nil
 	}
 	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
@@ -166,10 +191,7 @@ func (m *Manager) StartLocalServe() (HostState, error) {
 	defer logFile.Close()
 	cmd := exec.Command(bin, "serve",
 		"--port", strconv.Itoa(port), "--hostname", "127.0.0.1")
-	if password != "" {
-		cmd.Env = append(envWithout(os.Environ(), "OPENCODE_SERVER_PASSWORD"),
-			"OPENCODE_SERVER_PASSWORD="+password)
-	}
+	cmd.Env = EnvWithPassword(password)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Stdin = nil
@@ -181,24 +203,24 @@ func (m *Manager) StartLocalServe() (HostState, error) {
 	}
 	pid := cmd.Process.Pid
 
-	deadline := time.Now().Add(30 * time.Second)
 	c := NewClient(url, password)
-	for {
-		if v, ok := c.Health(); ok {
-			// Server is healthy: detach the OS process handle so the
-			// child outlives us; no Wait needed since it is detached.
-			_ = cmd.Process.Release()
-			return HostState{Name: "local", Local: true, URL: url, Healthy: true,
-				Version: v, Command: "opencode", Managed: true, PID: pid}, nil
-		}
-		if time.Now().After(deadline) {
-			// Health check timed out: kill and reap the child.
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			return HostState{}, fmt.Errorf("local serve on port %d did not become healthy (check ~/.opencode-serve.log)", port)
-		}
-		time.Sleep(300 * time.Millisecond)
+	var version string
+	healthy := pollUntil(30*time.Second, 300*time.Millisecond, func() bool {
+		v, ok := c.Health()
+		version = v
+		return ok
+	})
+	if !healthy {
+		// Health check timed out: kill and reap the child.
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return HostState{}, fmt.Errorf("local serve on port %d did not become healthy (check ~/.opencode-serve.log)", port)
 	}
+	// Server is healthy: detach the OS process handle so the child outlives
+	// us; no Wait needed since it is detached.
+	_ = cmd.Process.Release()
+	return HostState{Name: "local", Local: true, URL: url, Healthy: true,
+		Version: version, Command: "opencode", Managed: true, PID: pid}, nil
 }
 
 // StopLocalServe terminates a local opencode server by pid, after verifying
@@ -222,15 +244,8 @@ func (m *Manager) RestartLocal(pid int) (HostState, error) {
 		return HostState{}, err
 	}
 	// Wait until the process is gone so its port is released.
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if procName(pid) == "" {
-			break
-		}
-		if time.Now().After(deadline) {
-			return HostState{}, fmt.Errorf("pid %d did not exit", pid)
-		}
-		time.Sleep(300 * time.Millisecond)
+	if !pollUntil(10*time.Second, 300*time.Millisecond, func() bool { return procName(pid) == "" }) {
+		return HostState{}, fmt.Errorf("pid %d did not exit", pid)
 	}
 	return m.StartLocalServe()
 }
@@ -241,24 +256,18 @@ func (m *Manager) SnapshotLocal(withSessions bool, sessionLimit int) []HostState
 	var states []HostState
 	password := m.Config.LocalPassword
 	for _, inst := range DiscoverLocalInstances(password) {
-		url := fmt.Sprintf("http://127.0.0.1:%d", inst.Port)
-		c := NewClient(url, password)
-		version, ok := c.Health()
-		if !ok {
-			continue
-		}
 		st := HostState{
 			Name:    "local",
 			Local:   true,
 			PID:     inst.PID,
 			Command: inst.Command,
 			Managed: inst.Managed,
-			URL:     url,
+			URL:     localURL(inst.Port),
 			Healthy: true,
-			Version: version,
+			Version: inst.Version,
 		}
 		if withSessions {
-			fillSessions(c, &st, sessionLimit)
+			fillSessions(NewClient(st.URL, password), &st, sessionLimit)
 		}
 		states = append(states, st)
 	}

@@ -77,9 +77,9 @@ func procName(pid int) string {
 	return comm
 }
 
-// killProcess terminates the process with the given pid.
+// killProcess terminates the process with the given pid (SIGTERM).
 func killProcess(pid int) error {
-	return exec.Command("kill", strconv.Itoa(pid)).Run()
+	return syscall.Kill(pid, syscall.SIGTERM)
 }
 
 // findSSHTunnelPID returns the pid of the ssh process whose command line

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -164,7 +165,7 @@ func cmdList(m *core.Manager, args []string, withSessions bool) error {
 			if status == "" {
 				status = "idle"
 			}
-			fmt.Fprintf(sw, "  %s\t%s\t%s\t%s\n", s.ID, status, updated, truncate(s.Title, 60))
+			fmt.Fprintf(sw, "  %s\t%s\t%s\t%s\n", s.ID, status, updated, core.Truncate(s.Title, 60))
 		}
 		sw.Flush()
 	}
@@ -300,31 +301,36 @@ func ensureLocal(m *core.Manager) (core.HostState, error) {
 	return m.StartLocalServe()
 }
 
+// resolveTarget makes the target of a connect/run command reachable and
+// returns what the opencode handoff needs: the server URL, the host's
+// default directory (empty for local) and the password.
+func resolveTarget(m *core.Manager, hostArg string) (url, dir, password string, err error) {
+	if hostArg == "local" {
+		st, err := ensureLocal(m)
+		if err != nil {
+			return "", "", "", err
+		}
+		return st.URL, "", m.Config.LocalPassword, nil
+	}
+	_, h, err := m.Config.Get(hostArg)
+	if err != nil {
+		return "", "", "", err
+	}
+	if _, err := m.Up(h); err != nil {
+		return "", "", "", err
+	}
+	return core.BaseURL(h), h.Dir, h.Password, nil
+}
+
 func cmdConnect(m *core.Manager, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: ocm connect <host> [dir] [extra opencode attach args…]")
 	}
-	rest := args[1:]
-	var url, dir, password string
-	if args[0] == "local" {
-		st, err := ensureLocal(m)
-		if err != nil {
-			return err
-		}
-		url = st.URL
-		password = m.Config.LocalPassword
-	} else {
-		_, h, err := m.Config.Get(args[0])
-		if err != nil {
-			return err
-		}
-		dir = h.Dir
-		password = h.Password
-		if _, err := m.Up(h); err != nil {
-			return err
-		}
-		url = core.BaseURL(h)
+	url, dir, password, err := resolveTarget(m, args[0])
+	if err != nil {
+		return err
 	}
+	rest := args[1:]
 	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
 		dir = rest[0]
 		rest = rest[1:]
@@ -341,24 +347,9 @@ func cmdRun(m *core.Manager, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ocm run <host> [opencode run args…] <prompt>")
 	}
-	var url, password string
-	if args[0] == "local" {
-		st, err := ensureLocal(m)
-		if err != nil {
-			return err
-		}
-		url = st.URL
-		password = m.Config.LocalPassword
-	} else {
-		_, h, err := m.Config.Get(args[0])
-		if err != nil {
-			return err
-		}
-		password = h.Password
-		if _, err := m.Up(h); err != nil {
-			return err
-		}
-		url = core.BaseURL(h)
+	url, _, password, err := resolveTarget(m, args[0])
+	if err != nil {
+		return err
 	}
 	runArgs := append([]string{"run", "--attach", url}, args[1:]...)
 	return execOpencode(runArgs, password)
@@ -370,10 +361,18 @@ func cmdDashboard(m *core.Manager, args []string) error {
 	noOpen, args := hasFlag(args, "--no-open")
 	exitOnIdle, args := hasFlag(args, "--exit-on-idle")
 	for i := 0; i < len(args); i++ {
-		if args[i] == "--port" && i+1 < len(args) {
-			fmt.Sscanf(args[i+1], "%d", &port)
-			i++
+		if args[i] != "--port" {
+			continue
 		}
+		if i+1 >= len(args) {
+			return fmt.Errorf("--port requires a value")
+		}
+		p, err := strconv.Atoi(args[i+1])
+		if err != nil || p < 1 || p > 65535 {
+			return fmt.Errorf("invalid port %q", args[i+1])
+		}
+		port = p
+		i++
 	}
 	if up {
 		for _, name := range m.Config.Names() {
@@ -425,12 +424,4 @@ func execOpencode(args []string, password string) error {
 	argv := append([]string{bin}, args...)
 	fmt.Fprintf(os.Stderr, "ocm: exec %s\n", strings.Join(argv, " "))
 	return execReplace(bin, argv, core.EnvWithPassword(password))
-}
-
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "..."
 }

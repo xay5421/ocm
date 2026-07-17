@@ -26,10 +26,49 @@ func (m *Manager) logf(format string, args ...any) {
 	}
 }
 
+// localURL returns the base URL of a server reachable on a local port.
+func localURL(port int) string {
+	return fmt.Sprintf("http://127.0.0.1:%d", port)
+}
+
 // BaseURL returns the local URL through which the host's opencode server is
 // reachable (via the ssh tunnel, or directly for the local host).
 func BaseURL(h config.Host) string {
-	return fmt.Sprintf("http://127.0.0.1:%d", h.LocalPort)
+	return localURL(h.LocalPort)
+}
+
+// pollUntil calls cond every interval until it returns true or timeout
+// elapses, and reports whether cond ever succeeded.
+func pollUntil(timeout, interval time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if cond() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(interval)
+	}
+}
+
+// sshBaseOpts returns the ssh options shared by every ssh invocation ocm
+// makes:
+//   - BatchMode: ocm's ssh runs detached or non-interactive, so interactive
+//     auth would hang silently; fail with a clear error instead.
+//   - ControlMaster=no / ControlPath=none: stay out of any ssh connection
+//     multiplexing (e.g. ControlMaster auto in ~/.ssh/config). Otherwise an
+//     ocm tunnel could become the mux master that other clients (VSCode
+//     Remote-SSH, ...) attach to, and StopTunnel's kill would tear down
+//     their connections too - or, attached to someone else's master, ocm
+//     would eat into that connection's sshd MaxSessions channel quota.
+func sshBaseOpts() []string {
+	return []string{
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=10",
+		"-o", "ControlMaster=no",
+		"-o", "ControlPath=none",
+	}
 }
 
 // tunnelPattern is the ssh argument we can pgrep for.
@@ -54,6 +93,15 @@ func (m *Manager) StartTunnel(h config.Host) error {
 	if _, ok := TunnelPID(h); ok {
 		return nil
 	}
+	// Fail fast if another process already holds the local port. Without
+	// this check the readiness dial below would mistake that process for
+	// the tunnel and report success while ssh itself dies from
+	// ExitOnForwardFailure.
+	probe, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", h.LocalPort))
+	if err != nil {
+		return fmt.Errorf("local port %d is already in use by another process", h.LocalPort)
+	}
+	probe.Close()
 	m.logf("starting ssh tunnel 127.0.0.1:%d -> %s:%d", h.LocalPort, h.SSH, h.RemotePort)
 	logPath := tunnelLogPath(h)
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
@@ -61,18 +109,15 @@ func (m *Manager) StartTunnel(h config.Host) error {
 		return err
 	}
 	defer logFile.Close()
-	// BatchMode: a detached ssh has no terminal to prompt on, so interactive
-	// auth would hang silently; fail with a clear error instead.
-	cmd := exec.Command("ssh",
+	args := append(sshBaseOpts(),
 		"-N",
 		"-o", "ExitOnForwardFailure=yes",
-		"-o", "BatchMode=yes",
-		"-o", "ConnectTimeout=10",
 		"-o", "ServerAliveInterval=30",
 		"-o", "ServerAliveCountMax=3",
 		"-L", fmt.Sprintf("%d:127.0.0.1:%d", h.LocalPort, h.RemotePort),
 		h.SSH,
 	)
+	cmd := exec.Command("ssh", args...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = detachSysProcAttr()
@@ -94,6 +139,13 @@ func (m *Manager) StartTunnel(h config.Host) error {
 		if conn, err := net.DialTimeout("tcp",
 			fmt.Sprintf("127.0.0.1:%d", h.LocalPort), time.Second); err == nil {
 			conn.Close()
+			// Re-check that ssh did not exit between the select above and
+			// the successful dial (e.g. it died right after binding).
+			select {
+			case <-exited:
+				return fmt.Errorf("ssh tunnel to %s failed: %s", h.SSH, tailOfFile(logPath))
+			default:
+			}
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -166,9 +218,7 @@ func (m *Manager) StartServe(h config.Host) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	cmd := hideWindow(exec.CommandContext(ctx, "ssh",
-		"-o", "ConnectTimeout=10",
-		"-o", "BatchMode=yes",
-		h.SSH, serveCmd))
+		append(sshBaseOpts(), h.SSH, serveCmd)...))
 	cmd.Stdin = strings.NewReader(h.Password + "\n")
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
@@ -182,14 +232,19 @@ func (m *Manager) StartServe(h config.Host) error {
 
 // StopServe kills opencode serve on the remote host.
 func (m *Manager) StopServe(h config.Host) error {
-	// The [o] bracket keeps the pattern from matching the remote shell that
-	// runs this very pkill command.
-	killCmd := fmt.Sprintf(`pkill -f "[o]pencode serve --port %d" || true`, h.RemotePort)
+	// Two alternatives: the first matches a binary named "opencode" however
+	// it was started; the second matches whatever StartServe launched (the
+	// configured binary may have any name, e.g. a wrapper script, but ocm
+	// always passes --hostname 127.0.0.1). The [o]/[s] brackets keep the
+	// pattern from matching the remote shell that runs this very pkill.
+	killCmd := fmt.Sprintf(
+		`pkill -f "[o]pencode serve --port %d|[s]erve --port %d --hostname 127.0.0.1" || true`,
+		h.RemotePort, h.RemotePort)
 	m.logf("stopping opencode serve on %s", h.SSH)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	err := hideWindow(exec.CommandContext(ctx, "ssh",
-		"-o", "ConnectTimeout=10", "-o", "BatchMode=yes", h.SSH, killCmd)).Run()
+		append(sshBaseOpts(), h.SSH, killCmd)...)).Run()
 	if ctx.Err() != nil {
 		return fmt.Errorf("stop serve on %s timed out after 30s", h.SSH)
 	}
@@ -210,16 +265,13 @@ func (m *Manager) Down(h config.Host, stopServe bool) error {
 // WaitHealthy polls the server via the tunnel until healthy or timeout.
 func WaitHealthy(h config.Host, timeout time.Duration) (string, bool) {
 	c := NewClient(BaseURL(h), h.Password)
-	deadline := time.Now().Add(timeout)
-	for {
-		if v, ok := c.Health(); ok {
-			return v, true
-		}
-		if time.Now().After(deadline) {
-			return "", false
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
+	var version string
+	ok := pollUntil(timeout, 500*time.Millisecond, func() bool {
+		v, ok := c.Health()
+		version = v
+		return ok
+	})
+	return version, ok
 }
 
 // Up makes the host reachable: tunnel up + remote server running. Returns the
@@ -250,15 +302,12 @@ func (m *Manager) RestartServe(h config.Host) (string, error) {
 	// Wait for the old server to actually go away, otherwise StartServe's
 	// health pre-check would see the dying instance and skip the start.
 	c := NewClient(BaseURL(h), h.Password)
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if _, ok := c.Health(); !ok {
-			break
-		}
-		if time.Now().After(deadline) {
-			return "", fmt.Errorf("old server on %s did not stop", h.SSH)
-		}
-		time.Sleep(300 * time.Millisecond)
+	stopped := pollUntil(10*time.Second, 300*time.Millisecond, func() bool {
+		_, ok := c.Health()
+		return !ok
+	})
+	if !stopped {
+		return "", fmt.Errorf("old server on %s did not stop", h.SSH)
 	}
 	return m.Up(h)
 }

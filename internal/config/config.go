@@ -62,7 +62,8 @@ func (c *Config) Names() []string {
 	return names
 }
 
-// Get returns the host by name, with fuzzy prefix matching as a convenience.
+// Get returns the host by name; as a convenience, a name that is a unique
+// substring of exactly one configured host also matches.
 func (c *Config) Get(name string) (string, Host, error) {
 	if h, ok := c.Hosts[name]; ok {
 		return name, h, nil
@@ -149,10 +150,12 @@ func Load() (*Config, error) {
 		cfg.Hosts = map[string]Host{}
 	}
 	// Migration: local instances are now auto-discovered, drop legacy
-	// fixed "local" entries.
+	// fixed "local" entries. Only entries that are recognizably the old
+	// local host are removed; any other host without an ssh destination is
+	// treated as a config mistake below, never silently deleted.
 	changed := false
 	for name, h := range cfg.Hosts {
-		if h.SSH == "" || h.SSH == "local" {
+		if h.SSH == "local" || (name == "local" && h.SSH == "") {
 			delete(cfg.Hosts, name)
 			changed = true
 		}
@@ -162,9 +165,12 @@ func Load() (*Config, error) {
 			fmt.Fprintf(os.Stderr, "ocm: removed legacy local host entry from %s (local servers are auto-discovered now)\n", p)
 		}
 	}
-	// Reject hosts whose opencode path contains shell metacharacters; the
-	// path is used inside a remote shell command over SSH.
 	for name, h := range cfg.Hosts {
+		if h.SSH == "" {
+			return nil, fmt.Errorf("host %q: missing \"ssh\" destination", name)
+		}
+		// Reject opencode paths with shell metacharacters; the path is used
+		// inside a remote shell command over SSH.
 		if !ValidOpencode(h.Opencode) {
 			return nil, fmt.Errorf("host %q: opencode path %q contains unsafe characters; only letters, digits, ., /, _, ~, -, and spaces are allowed", name, h.Opencode)
 		}

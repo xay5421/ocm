@@ -127,10 +127,12 @@ func killProcess(pid int) error {
 func findSSHTunnelPID(pattern string) (int, bool) {
 	// Pattern may contain user-provided SSH hostnames; escape single quotes
 	// for PowerShell's single-quoted string syntax ('' represents one ').
+	// String.Contains is an ordinal substring test, unlike -like, whose
+	// wildcard syntax would misinterpret [ ] in hostnames (IPv6 literals).
 	safe := strings.ReplaceAll(pattern, "'", "''")
 	query := fmt.Sprintf(
 		`Get-CimInstance Win32_Process -Filter "Name='ssh.exe'" | `+
-			`Where-Object { $_.CommandLine -like '*-L *%s*' } | `+
+			`Where-Object { $_.CommandLine -ne $null -and $_.CommandLine.Contains('-L %s') } | `+
 			`Select-Object -First 1 -ExpandProperty ProcessId`, safe)
 	out, err := hideWindow(exec.Command("powershell",
 		"-NoProfile", "-NonInteractive", "-Command", query)).Output()
