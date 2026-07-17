@@ -1,0 +1,55 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # goreleaser changelog + go-winres git-tag need history
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The macOS app needs cgo (WKWebView), so it is built natively here and
+  # attached to the release created by the job above.
+  macos-app:
+    needs: release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Build universal ocm.app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          LDFLAGS="-s -w -X github.com/xay5421/ocm/internal/cli.Version=${TAG}"
+          mkdir -p dist
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/ocm_arm64 .
+          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/ocm_amd64 .
+          lipo -create -output dist/ocm dist/ocm_arm64 dist/ocm_amd64
+          go run ./tools/makeapp -os darwin -arch universal -version "$TAG" \
+            -binary dist/ocm -out "dist/ocm_${VERSION}_darwin_universal_app.zip"
+          tar -czf "dist/ocm_${VERSION}_darwin_universal.tar.gz" -C dist ocm
+          gh release upload "$TAG" \
+            "dist/ocm_${VERSION}_darwin_universal_app.zip" \
+            "dist/ocm_${VERSION}_darwin_universal.tar.gz" \
+            --clobber

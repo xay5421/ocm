@@ -1,0 +1,64 @@
+version: 2
+
+project_name: ocm
+
+before:
+  hooks:
+    - go mod tidy
+    # Regenerate icons (assets/ocm.ico + assets/ocm.icns).
+    - go run ./tools/genicon
+    # Refresh the Windows resources (.syso) with the release version so the
+    # exe properties show the tagged version.
+    - go run github.com/tc-hib/go-winres@v0.3.3 make --arch amd64,arm64 --product-version git-tag --file-version git-tag
+    - go run github.com/tc-hib/go-winres@v0.3.3 make --arch amd64,arm64 --product-version git-tag --file-version git-tag --out cmd/ocm-dashboard/rsrc
+
+builds:
+  # The CLI (console app). darwin is built separately on a macOS runner
+  # because the native dashboard window needs cgo/WKWebView there (see
+  # .github/workflows/release.yml).
+  - id: ocm
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/xay5421/ocm/internal/cli.Version={{.Version}}
+
+  # Double-click dashboard launcher (GUI subsystem: no console window).
+  - id: ocm-dashboard
+    main: ./cmd/ocm-dashboard
+    binary: ocm-dashboard
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -H=windowsgui -X github.com/xay5421/ocm/internal/cli.Version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+# The macOS ocm.app (universal, cgo) is built and uploaded by the macos-app
+# job in .github/workflows/release.yml after this release is created.

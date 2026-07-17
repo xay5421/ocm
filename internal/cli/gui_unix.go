@@ -2,22 +2,12 @@
 
 package cli
 
-import "os"
-
 // launchedFromGUI reports whether ocm was started from a graphical shell
-// (e.g. double-clicked in a Linux file manager) rather than a terminal:
-// stdout is not a tty and no TERM is set.
-//
-// Note: on macOS, Finder runs command-line binaries inside a Terminal window
-// (a real tty), so a Finder double-click shows the usage text instead.
-func launchedFromGUI() bool {
-	fi, err := os.Stdout.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice == 0 && os.Getenv("TERM") == ""
-}
+// rather than a terminal. Only Windows has this detection (double-clicking
+// ocm.exe): on macOS the app bundle passes an explicit `dashboard` argument
+// (see tools/makeapp), and on Linux there is no native dashboard window, so
+// a GUI launch would only leave a headless server behind.
+func launchedFromGUI() bool { return false }
 
-// freeConsole is a no-op outside Windows: GUI launches have no terminal
-// window to hide in the first place.
+// freeConsole is a no-op outside Windows.
 func freeConsole() {}

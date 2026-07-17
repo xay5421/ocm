@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"runtime"
@@ -31,12 +32,14 @@ Usage:
   ocm up local                      Start a local opencode serve (fixed port 14000)
   ocm down local [pid]              Stop a discovered local server
   ocm restart local [pid]           Restart a local server (fixed port 14000)
-  ocm dashboard [--port N] [--up] [--exit-on-idle]
-                                    Start the local web dashboard (default port 4800;
-                                    --exit-on-idle quits when all pages are closed)
+  ocm dashboard [--port N] [--up]   Open the dashboard app window (Windows/macOS;
+                                    serves http://127.0.0.1:4800, closing the
+                                    window exits; elsewhere open the URL manually)
   ocm config                        Print config file path and contents
+  ocm version                       Print the ocm version
 
-Double-clicking the ocm binary in a graphical shell starts the dashboard.
+On Windows, double-clicking ocm.exe (or ocm-dashboard.exe) opens the
+dashboard window; on macOS use the ocm.app bundle.
 
 Hosts are defined in ~/.config/ocm/config.json (override with $OCM_CONFIG).
 Extra args after <host> are passed through to 'opencode attach' / 'opencode run'.
@@ -48,17 +51,20 @@ Server passwords (HTTP basic auth, opencode's OPENCODE_SERVER_PASSWORD):
 ocm exports the password when starting servers and authenticates with it.
 `
 
+// Version is stamped at build time via
+// -ldflags "-X github.com/xay5421/ocm/internal/cli.Version=v1.2.3".
+var Version = "dev"
+
 // Run executes the CLI.
 func Run(args []string) error {
 	if len(args) == 0 {
-		// Double-clicked from a graphical shell: start the dashboard
-		// instead of printing help nobody would see. The console window
-		// (Windows) is dropped; quit via the dashboard's exit button.
+		// Double-clicked in Explorer (Windows): open the dashboard
+		// window instead of printing help nobody would see. The
+		// console window is dropped; closing the dashboard window
+		// stops the process.
 		if launchedFromGUI() {
 			freeConsole()
-			// --exit-on-idle: without a terminal nobody could stop the
-			// process, so it exits once all dashboard pages are closed.
-			args = []string{"dashboard", "--exit-on-idle"}
+			args = []string{"dashboard"}
 		} else {
 			fmt.Print(usage)
 			return nil
@@ -69,6 +75,9 @@ func Run(args []string) error {
 	switch cmd {
 	case "help", "-h", "--help":
 		fmt.Print(usage)
+		return nil
+	case "version", "-v", "--version":
+		fmt.Println("ocm", Version)
 		return nil
 	}
 
@@ -358,8 +367,6 @@ func cmdRun(m *core.Manager, args []string) error {
 func cmdDashboard(m *core.Manager, args []string) error {
 	port := 4800
 	up, args := hasFlag(args, "--up")
-	noOpen, args := hasFlag(args, "--no-open")
-	exitOnIdle, args := hasFlag(args, "--exit-on-idle")
 	for i := 0; i < len(args); i++ {
 		if args[i] != "--port" {
 			continue
@@ -385,20 +392,48 @@ func cmdDashboard(m *core.Manager, args []string) error {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	url := "http://" + addr
 	fmt.Printf("ocm dashboard: %s\n", url)
-	if !noOpen {
-		go func() {
-			time.Sleep(300 * time.Millisecond)
-			openBrowser(url)
-		}()
-	}
+
+	// Serve in the background, show the native window on this (main)
+	// goroutine, and shut down when it is closed.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errc := make(chan error, 1)
 	srv := dashboard.New(m)
-	if exitOnIdle {
-		srv.ExitOnIdle = time.Minute
+	go func() { errc <- srv.Serve(ctx, addr) }()
+	waitReachable(addr, 2*time.Second)
+	if openWindow(url, "ocm") {
+		cancel()
+		<-errc
+		return nil
 	}
-	return srv.Serve(context.Background(), addr)
+	switch runtime.GOOS {
+	case "windows", "darwin":
+		// The window should have opened; do not linger headless.
+		cancel()
+		<-errc
+		return fmt.Errorf("could not open the dashboard window (is the WebView2 runtime installed?)")
+	default:
+		// No native window on this platform: keep serving so the URL
+		// above can be opened manually; Ctrl-C to stop.
+		return <-errc
+	}
 }
 
-// openBrowser opens url in the default browser, best effort.
+// waitReachable polls addr until it accepts TCP connections, so the window
+// does not navigate before the dashboard listener is up.
+func waitReachable(addr string, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
+			c.Close()
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// openBrowser opens url in the default browser, best effort. It is used by
+// the dashboard window to open external links (see window_*.go).
 func openBrowser(url string) {
 	switch runtime.GOOS {
 	case "windows":

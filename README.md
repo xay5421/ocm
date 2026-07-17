@@ -1,6 +1,6 @@
 # ocm
 
-<img src="internal/dashboard/static/favicon.svg" width="64" align="right" alt="ocm logo">
+<img src="assets/ocm.svg" width="64" align="right" alt="ocm logo">
 
 `ocm` (opencode connection manager) manages [opencode](https://opencode.ai)
 servers across machines: it starts `opencode serve` on remote hosts over SSH,
@@ -19,8 +19,8 @@ remote machines and reconnect from anywhere.
   embedded in editors) are discovered automatically — no config needed.
 - **Status at a glance**: `ocm list` / `ocm status` show tunnel state, server
   health, version, and active sessions per host (`--json` for scripting).
-- **Web dashboard**: `ocm dashboard` serves a small local UI with per-host
-  health and up/down/restart actions.
+- **Dashboard app**: `ocm dashboard` opens a native window (Windows/macOS)
+  with per-host health and up/down/restart actions.
 - **Password support**: servers can be protected with HTTP basic auth
   (opencode's `OPENCODE_SERVER_PASSWORD`); ocm exports the password when
   starting servers and authenticates with it, keeping it off command lines.
@@ -100,9 +100,9 @@ ocm restart <host>                Restart the remote server (e.g. after config c
 ocm up local                      Start a local opencode serve (fixed port 14000)
 ocm down local [pid]              Stop a discovered local server
 ocm restart local [pid]           Restart a local server (fixed port 14000)
-ocm dashboard [--port N] [--up] [--exit-on-idle]
-                                  Start the local web dashboard (default port 4800)
+ocm dashboard [--port N] [--up]   Open the dashboard app window (Windows/macOS)
 ocm config                        Print config file path and contents
+ocm version                       Print the ocm version
 ```
 
 Notes:
@@ -155,32 +155,29 @@ at file mode `0600`.
 ## Dashboard
 
 ```sh
-ocm dashboard                 # http://127.0.0.1:4800, opens your browser
-ocm dashboard --up            # also bring all configured hosts up first
-ocm dashboard --port 4900     # custom port
-ocm dashboard --no-open       # don't open the browser
-ocm dashboard --exit-on-idle  # exit once all dashboard pages are closed
+ocm dashboard              # open the dashboard app window
+ocm dashboard --up         # also bring all configured hosts up first
+ocm dashboard --port 4900  # custom port (default 4800)
 ```
 
-The dashboard shows every host (including auto-discovered local instances)
-with health, version, and up/down/restart buttons. It binds to `127.0.0.1`
-only.
+The dashboard is a native app window (WebView2 on Windows, WKWebView on
+macOS) showing every host — including auto-discovered local instances — with
+health, version, and up/down/restart buttons. Closing the window exits the
+dashboard; tunnels and servers keep running. The backing HTTP server binds
+to `127.0.0.1` only, and links open in your default browser.
 
-You can also start the dashboard by **double-clicking the ocm binary**:
+Per platform:
 
-- **Windows**: double-click `ocm.exe` in Explorer — ocm detects the GUI
-  launch, detaches from its console (the window closes by itself), and runs
-  the dashboard in the background with `--exit-on-idle`: once you close the
-  last dashboard page, the process exits by itself about a minute later. The
-  dashboard's quit button stops it immediately.
-- **Linux**: double-click / "Run" the binary in a file manager — detected via
-  the missing terminal.
-- **macOS**: Finder runs command-line binaries inside a Terminal window, so a
-  double-click shows the help text instead; run `ocm dashboard` there, or
-  create a `ocm-dashboard.command` file containing `ocm dashboard` and
-  double-click that.
+- **Windows**: double-click `ocm-dashboard.exe` (no console window), or run
+  `ocm dashboard` in a terminal. Double-clicking `ocm.exe` works too, with a
+  brief console flash.
+- **macOS**: install `ocm.app` (from the `_app.zip` release asset) into
+  Applications and launch it. The CLI binary lives at
+  `ocm.app/Contents/MacOS/ocm` if you want to symlink it onto your PATH.
+- **Linux**: no native window; `ocm dashboard` serves the UI and prints the
+  URL to open manually.
 
-Running `ocm` without arguments in a terminal still prints the help text.
+Running `ocm` without arguments in a terminal prints the help text.
 
 ## How it works
 

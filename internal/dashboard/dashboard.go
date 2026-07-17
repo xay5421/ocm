@@ -12,11 +12,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/xay5421/ocm/internal/core"
@@ -25,18 +23,14 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-// Server is the dashboard HTTP server.
+// Server is the dashboard HTTP server. It serves the UI shown in the native
+// dashboard window; the process lifetime is tied to that window (see
+// cmdDashboard in internal/cli).
 type Server struct {
 	Manager *core.Manager
-	// ExitOnIdle, when > 0, makes the process exit after no browser page
-	// has been connected (via /api/events) for this long. Used for GUI
-	// launches, where there is no terminal to Ctrl-C.
-	ExitOnIdle time.Duration
-
-	watchers atomic.Int64 // open /api/events connections
 
 	// stateMu serializes snapshotting so concurrent /api/state requests
-	// (several tabs, slow hosts) cannot pile up; results are briefly cached.
+	// (slow hosts) cannot pile up; results are briefly cached.
 	stateMu    sync.Mutex
 	stateCache []core.HostState
 	stateAt    time.Time
@@ -64,8 +58,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/local/up", s.requireOrigin(s.handleLocalUp))
 	mux.HandleFunc("POST /api/local/{pid}/down", s.requireOrigin(s.handleLocalDown))
 	mux.HandleFunc("POST /api/local/{pid}/restart", s.requireOrigin(s.handleLocalRestart))
-	mux.HandleFunc("POST /api/quit", s.requireOrigin(s.handleQuit))
-	mux.HandleFunc("GET /api/events", s.handleEvents)
 	// Diagnostics: the server binds to 127.0.0.1 only, and a goroutine dump
 	// (/debug/pprof/goroutine?debug=2) is invaluable if it ever wedges.
 	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
@@ -118,94 +110,15 @@ func (s *Server) requireOrigin(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// handleEvents is a server-sent-events stream the page keeps open as a
-// liveness signal (and reconnects automatically). Browsers throttle timers in
-// background tabs but keep established connections, so this is more reliable
-// than a polling heartbeat for detecting "no page open anymore".
-//
-// Each stream is capped at maxEventStreamAge: writes into a half-closed
-// connection (browser tab gone, FIN received but never RST) do not fail, so
-// without the cap such dead streams would count as watchers forever and keep
-// an --exit-on-idle dashboard alive. Live pages reconnect instantly.
-func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	const maxEventStreamAge = 5 * time.Minute
-	fl, ok := w.(http.Flusher)
-	if !ok {
-		writeErr(w, 500, fmt.Errorf("streaming unsupported"))
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	s.watchers.Add(1)
-	defer s.watchers.Add(-1)
-	fmt.Fprint(w, ": connected\n\n")
-	fl.Flush()
-	expire := time.NewTimer(maxEventStreamAge)
-	defer expire.Stop()
-	tick := time.NewTicker(15 * time.Second)
-	defer tick.Stop()
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-expire.C:
-			return
-		case <-tick.C:
-			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
-				return
-			}
-			fl.Flush()
-		}
-	}
-}
-
-// idleWatch exits the process once no page has been connected for
-// s.ExitOnIdle. The countdown also runs from startup, so a dashboard whose
-// browser never opened cleans itself up too.
-func (s *Server) idleWatch(ctx context.Context) {
-	idleSince := time.Now()
-	tick := time.NewTicker(5 * time.Second)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-			if s.watchers.Load() > 0 {
-				idleSince = time.Now()
-				continue
-			}
-			if time.Since(idleSince) >= s.ExitOnIdle {
-				fmt.Fprintf(os.Stderr, "ocm: dashboard idle for %s, exiting\n", s.ExitOnIdle)
-				os.Exit(0)
-			}
-		}
-	}
-}
-
-// handleQuit exits the ocm process. It exists so the dashboard can be closed
-// when there is no terminal to Ctrl-C (e.g. started by double-click).
-// Tunnels and servers keep running; only the dashboard process stops.
-func (s *Server) handleQuit(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]bool{"ok": true})
-	go func() {
-		time.Sleep(200 * time.Millisecond) // let the response flush
-		os.Exit(0)
-	}()
-}
-
 // Serve blocks serving HTTP on addr until ctx is cancelled.
 func (s *Server) Serve(ctx context.Context, addr string) error {
-	if s.ExitOnIdle > 0 {
-		go s.idleWatch(ctx)
-	}
 	srv := &http.Server{
 		Addr:    addr,
 		Handler: s.Handler(),
-		// No WriteTimeout: /api/events is a long-lived SSE stream, and
-		// actions like "up" legitimately take up to a minute (ssh tunnel +
-		// remote server start). ReadHeaderTimeout still guards the accept
-		// path; the server binds to 127.0.0.1 only.
+		// No WriteTimeout: actions like "up" legitimately take up to a
+		// minute (ssh tunnel + remote server start). ReadHeaderTimeout
+		// still guards the accept path; the server binds to 127.0.0.1
+		// only.
 		ReadTimeout: 10 * time.Second,
 		IdleTimeout: 60 * time.Second,
 	}

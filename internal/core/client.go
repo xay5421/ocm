@@ -1,7 +1,6 @@
 // Package core contains the reusable logic of ocm: ssh tunnel management,
 // remote opencode server lifecycle and a minimal opencode HTTP API client.
-// The future dashboard should import this package (or shell out to
-// `ocm ... --json`).
+// The dashboard (internal/dashboard) builds on this package.
 package core
 
 import (

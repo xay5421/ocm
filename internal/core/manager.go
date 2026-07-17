@@ -312,8 +312,8 @@ func (m *Manager) RestartServe(h config.Host) (string, error) {
 	return m.Up(h)
 }
 
-// HostState is a point-in-time snapshot of one host, used by list/status and
-// consumable by the future dashboard as JSON.
+// HostState is a point-in-time snapshot of one host, used by list/status
+// and served to the dashboard as JSON.
 type HostState struct {
 	Name      string        `json:"name"`
 	SSH       string        `json:"ssh,omitempty"`
