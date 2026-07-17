@@ -49,6 +49,9 @@ archives:
         formats: [zip]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    # Windows archives carry ocm.exe + ocm-dashboard.exe; other platforms
+    # only ocm. This difference is intentional.
+    allow_different_binary_count: true
 
 checksum:
   name_template: checksums.txt
