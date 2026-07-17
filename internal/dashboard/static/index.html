@@ -122,7 +122,6 @@ function render(state) {
     const tag = `${esc(h.command)} · pid ${h.pid}${h.managed ? "" : " · 外部托管"}`;
     const acting = busy.has("local");
     const actions = [
-      `<button onclick="copyAttach('${esc(h.url)}')">attach</button>`,
       h.managed ? `<button ${acting ? "disabled" : ""}
           onclick="act('/api/local/${h.pid}/restart','local','重启',this)">重启</button>` : "",
       h.managed ? `<button class="danger" ${acting ? "disabled" : ""}
@@ -150,8 +149,7 @@ function render(state) {
       ? `<a href="${esc(h.url)}" target="_blank">${esc(h.url)}</a>`
       : `<span class="off">${esc(h.url)}</span>`;
     const actions = h.healthy
-      ? `<button onclick="copyAttach('${esc(h.url)}')">attach</button>
-         <button ${acting ? "disabled" : ""}
+      ? `<button ${acting ? "disabled" : ""}
            onclick="act('/api/hosts/${esc(h.name)}/restart','${esc(h.name)}','重启',this)">重启</button>
          <button class="danger" ${acting ? "disabled" : ""}
            onclick="act('/api/hosts/${esc(h.name)}/down','${esc(h.name)}','断开',this)">断开</button>`
@@ -178,13 +176,6 @@ async function act(path, key, verb, btn) {
   }
   busy.delete(key);
   refresh();
-}
-
-function copyAttach(url) {
-  const cmd = "opencode attach " + url;
-  navigator.clipboard.writeText(cmd)
-    .then(() => toast("已复制: " + cmd))
-    .catch(() => toast(cmd, 8000));
 }
 
 refresh();
