@@ -55,6 +55,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/hosts/{name}/up", s.requireOrigin(s.handleUp))
 	mux.HandleFunc("POST /api/hosts/{name}/down", s.requireOrigin(s.handleDown))
 	mux.HandleFunc("POST /api/hosts/{name}/restart", s.requireOrigin(s.handleRestart))
+	mux.HandleFunc("POST /api/hosts/{name}/upgrade", s.requireOrigin(s.handleUpgrade))
 	mux.HandleFunc("POST /api/local/up", s.requireOrigin(s.handleLocalUp))
 	mux.HandleFunc("POST /api/local/{pid}/down", s.requireOrigin(s.handleLocalDown))
 	mux.HandleFunc("POST /api/local/{pid}/restart", s.requireOrigin(s.handleLocalRestart))
@@ -190,6 +191,23 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"version": version})
+}
+
+// handleUpgrade runs `opencode upgrade` on the remote host. The server is
+// deliberately not restarted here: the user decides when to interrupt
+// running sessions via the restart button.
+func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
+	_, h, err := s.Manager.Config.Get(r.PathValue("name"))
+	if err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+	out, err := s.Manager.UpgradeOpencode(h)
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	writeJSON(w, map[string]string{"output": out})
 }
 
 func (s *Server) handleLocalRestart(w http.ResponseWriter, r *http.Request) {

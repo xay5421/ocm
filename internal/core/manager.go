@@ -186,6 +186,48 @@ func (m *Manager) StopTunnel(h config.Host) error {
 	return killProcess(pid)
 }
 
+// remoteOpencodePath returns h.Opencode as a double-quoted string for use
+// inside a remote shell command, with a leading ~ rewritten to $HOME so it
+// still expands inside the quotes. h.Opencode is validated at config load
+// time to contain only safe characters.
+func remoteOpencodePath(h config.Host) string {
+	p := strings.TrimSpace(h.Opencode)
+	if strings.HasPrefix(p, "~/") {
+		p = "$HOME/" + p[2:]
+	} else if p == "~" {
+		p = "$HOME"
+	}
+	return `"` + p + `"`
+}
+
+// UpgradeOpencode runs `opencode upgrade` on the remote host and returns the
+// combined output, ending in a "version: X.Y.Z" line with the binary's
+// version after the upgrade. A running `opencode serve` keeps executing the
+// old version until it is restarted.
+//
+// Note: `opencode upgrade` only works for binaries installed via the
+// official install script; for package-manager installs (npm, brew, ...) it
+// prints an explanatory message, which is passed through to the caller.
+func (m *Manager) UpgradeOpencode(h config.Host) (string, error) {
+	bin := remoteOpencodePath(h)
+	upgradeCmd := fmt.Sprintf(`%s upgrade 2>&1 && printf 'version: ' && %s --version 2>&1`, bin, bin)
+	m.logf("running opencode upgrade on %s", h.SSH)
+	// Generous deadline: the upgrade downloads a new binary.
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+	cmd := hideWindow(exec.CommandContext(ctx, "ssh",
+		append(sshBaseOpts(), h.SSH, upgradeCmd)...))
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("opencode upgrade on %s timed out after 180s", h.SSH)
+	}
+	if err != nil {
+		return "", fmt.Errorf("opencode upgrade on %s failed: %v: %s",
+			h.SSH, err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // StartServe launches `opencode serve` on the remote host in the background.
 // It is safe to call when a server is already running: the command checks the
 // port first.
@@ -194,16 +236,7 @@ func (m *Manager) StartServe(h config.Host) error {
 	// remote command line / in remote `ps` output. The health pre-check
 	// treats 200 (healthy) and 401 (running, password-protected) both as
 	// "already running", so it needs no credentials.
-	// h.Opencode is validated at config load time to contain only safe
-	// characters; the $HOME prefix replaces ~ for expansion inside quotes.
-	servePath := h.Opencode
-	servePath = strings.TrimSpace(servePath)
-	if strings.HasPrefix(servePath, "~/") {
-		servePath = "$HOME/" + servePath[2:]
-	} else if servePath == "~" {
-		servePath = "$HOME"
-	}
-	servePath = `"` + servePath + `"`
+	servePath := remoteOpencodePath(h)
 	serveCmd := fmt.Sprintf(
 		`IFS= read -r OCM_PW; `+
 			`code=$(curl -s -o /dev/null -m 2 -w '%%{http_code}' http://127.0.0.1:%d/global/health 2>/dev/null); `+

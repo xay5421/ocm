@@ -97,6 +97,7 @@ ocm down <host> [--serve]         Stop tunnel (--serve also stops remote server)
 ocm connect <host> [dir] [args…]  Up + attach local TUI to the remote server
 ocm run <host> [args…] <prompt>   Up + run a prompt on the remote server
 ocm restart <host>                Restart the remote server (e.g. after config change)
+ocm upgrade <host>|--all [--restart]  Run 'opencode upgrade' on remote host(s)
 ocm up local                      Start a local opencode serve (fixed port 14000)
 ocm down local [pid]              Stop a discovered local server
 ocm restart local [pid]           Restart a local server (fixed port 14000)
@@ -117,6 +118,12 @@ Notes:
 - `ocm down <host>` only closes the tunnel; the remote server (and its
   sessions) keep running. Add `--serve` to stop the remote server too.
 - Remote server logs go to `~/.opencode-serve.log` on the remote machine.
+- `ocm upgrade` runs opencode's built-in self-updater over ssh (no tunnel
+  needed). A running server keeps the old version until restarted: pass
+  `--restart` or run `ocm restart <host>` when convenient. Note that
+  `opencode upgrade` only works for binaries installed via the official
+  install script; for npm/brew installs it prints a message telling you to
+  use the package manager instead.
 
 ## Configuration
 

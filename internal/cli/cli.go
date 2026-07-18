@@ -29,6 +29,9 @@ Usage:
   ocm connect <host> [dir] [args…]  Up + attach local TUI to the remote server
   ocm run <host> [args…] <prompt>   Up + run a prompt on the remote server
   ocm restart <host>                Restart the remote server (e.g. after config change)
+  ocm upgrade <host>|--all [--restart]  Run 'opencode upgrade' on remote host(s)
+                                    (--restart also restarts the server so the
+                                    new version takes effect)
   ocm up local                      Start a local opencode serve (fixed port 14000)
   ocm down local [pid]              Stop a discovered local server
   ocm restart local [pid]           Restart a local server (fixed port 14000)
@@ -100,6 +103,8 @@ func Run(args []string) error {
 		return cmdDown(m, rest)
 	case "restart":
 		return cmdRestart(m, rest)
+	case "upgrade":
+		return cmdUpgrade(m, rest)
 	case "connect":
 		return cmdConnect(m, rest)
 	case "run":
@@ -249,6 +254,58 @@ func cmdRestart(m *core.Manager, args []string) error {
 		return err
 	}
 	fmt.Printf("%s restarted: %s (opencode %s)\n", name, core.BaseURL(h), v)
+	return nil
+}
+
+// cmdUpgrade runs `opencode upgrade` on one or all remote hosts. The running
+// server keeps its old version until restarted, so --restart is offered to
+// apply the upgrade immediately.
+func cmdUpgrade(m *core.Manager, args []string) error {
+	restart, args := hasFlag(args, "--restart")
+	all, args := hasFlag(args, "--all")
+	var names []string
+	switch {
+	case all:
+		names = m.Config.Names()
+		if len(names) == 0 {
+			return fmt.Errorf("no hosts configured")
+		}
+	case len(args) < 1:
+		return fmt.Errorf("usage: ocm upgrade <host>|--all [--restart]")
+	default:
+		name, _, err := m.Config.Get(args[0])
+		if err != nil {
+			return err
+		}
+		names = []string{name}
+	}
+	var failed []string
+	for _, name := range names {
+		h := m.Config.Hosts[name]
+		out, err := m.UpgradeOpencode(h)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ocm: %s: %v\n", name, err)
+			failed = append(failed, name)
+			continue
+		}
+		fmt.Printf("%s:\n  %s\n", name, strings.ReplaceAll(out, "\n", "\n  "))
+		if !restart {
+			continue
+		}
+		v, err := m.RestartServe(h)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ocm: %s: restart failed: %v\n", name, err)
+			failed = append(failed, name)
+			continue
+		}
+		fmt.Printf("%s restarted: %s (opencode %s)\n", name, core.BaseURL(h), v)
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("upgrade failed for: %s", strings.Join(failed, ", "))
+	}
+	if !restart {
+		fmt.Println("note: running servers keep the old version until restarted (ocm restart <host>)")
+	}
 	return nil
 }
 

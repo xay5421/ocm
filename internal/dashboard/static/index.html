@@ -148,13 +148,17 @@ function render(state) {
     const urlHTML = h.healthy
       ? `<a href="${esc(h.url)}" target="_blank">${esc(h.url)}</a>`
       : `<span class="off">${esc(h.url)}</span>`;
+    const upgradeBtn = `<button ${acting ? "disabled" : ""}
+           onclick="act('/api/hosts/${esc(h.name)}/upgrade','${esc(h.name)}','升级',this)">升级</button>`;
     const actions = h.healthy
-      ? `<button ${acting ? "disabled" : ""}
+      ? `${upgradeBtn}
+         <button ${acting ? "disabled" : ""}
            onclick="act('/api/hosts/${esc(h.name)}/restart','${esc(h.name)}','重启',this)">重启</button>
          <button class="danger" ${acting ? "disabled" : ""}
            onclick="act('/api/hosts/${esc(h.name)}/down','${esc(h.name)}','断开',this)">断开</button>`
       : `<button class="primary" ${acting ? "disabled" : ""}
-           onclick="act('/api/hosts/${esc(h.name)}/up','${esc(h.name)}','连接',this)">连接</button>`;
+           onclick="act('/api/hosts/${esc(h.name)}/up','${esc(h.name)}','连接',this)">连接</button>
+         ${upgradeBtn}`;
     root.appendChild(row(`
       <span class="dot ${h.healthy ? "ok" : ""}"></span>
       ${info(esc(h.name), "", urlHTML)}
@@ -168,9 +172,16 @@ async function act(path, key, verb, btn) {
   btn.disabled = true;
   if (verb === "连接") btn.textContent = "连接中…";
   if (verb === "重启") btn.textContent = "重启中…";
+  if (verb === "升级") btn.textContent = "升级中…";
   try {
-    await api(path, {method: "POST"});
-    toast(`${key} 已${verb}`);
+    const data = await api(path, {method: "POST"});
+    if (verb === "升级" && data.output) {
+      // Last line is "version: X.Y.Z" (the binary's version after upgrade).
+      const last = data.output.trim().split("\n").pop();
+      toast(`${key} 升级完成（${last}），重启后生效`, 6000);
+    } else {
+      toast(`${key} 已${verb}`);
+    }
   } catch (e) {
     toast(`${key} ${verb}失败: ` + e.message, 6000);
   }
