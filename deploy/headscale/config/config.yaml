@@ -1,0 +1,60 @@
+# Headscale configuration (image headscale/headscale:0.26).
+# Replace hs.example.com with your domain.
+server_url: https://hs.example.com
+listen_addr: 0.0.0.0:8080
+metrics_listen_addr: 127.0.0.1:9090
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: false
+
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+# Tailnet IP ranges (defaults; devices get a stable 100.64.x.x address).
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+
+derp:
+  server:
+    # Embedded DERP relay: when direct WireGuard NAT traversal fails
+    # (common with corporate NATs), traffic relays through this server
+    # over HTTPS. Much faster/more reliable in China than Tailscale's
+    # public DERP fleet.
+    enabled: true
+    region_id: 999
+    region_code: "self"
+    region_name: "Self-hosted DERP"
+    stun_listen_addr: "0.0.0.0:3478"
+    private_key_path: /var/lib/headscale/derp_server_private.key
+    automatically_add_embedded_derp_region: true
+  # Do not fetch Tailscale's public DERP map; use only the embedded relay.
+  urls: []
+  paths: []
+  auto_update_enabled: false
+  update_frequency: 24h
+
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+
+dns:
+  magic_dns: true
+  # Must be different from the headscale server domain. Devices become
+  # <hostname>.<user>.ts.internal (resolvable by tailnet members that
+  # accept DNS).
+  base_domain: ts.internal
+  nameservers:
+    global:
+      - 223.5.5.5
+      - 119.29.29.29
+
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"
+
+log:
+  level: info
+
+disable_check_updates: true
+ephemeral_node_inactivity_timeout: 30m

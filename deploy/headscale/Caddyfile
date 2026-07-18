@@ -1,0 +1,5 @@
+# Replace hs.example.com with your domain (DNS A record -> this server).
+# Caddy obtains and renews the Let's Encrypt certificate automatically.
+hs.example.com {
+	reverse_proxy headscale:8080
+}

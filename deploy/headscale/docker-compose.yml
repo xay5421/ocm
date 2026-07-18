@@ -1,0 +1,31 @@
+# Headscale + Caddy (auto-TLS). Put this directory on the public server,
+# edit the domain in Caddyfile and config/config.yaml, then:
+#   docker compose up -d
+services:
+  headscale:
+    image: headscale/headscale:0.26
+    container_name: headscale
+    restart: unless-stopped
+    command: serve
+    volumes:
+      - ./config:/etc/headscale
+      - ./data:/var/lib/headscale
+    ports:
+      # STUN for NAT traversal (embedded DERP). TCP 443 goes through Caddy.
+      - "3478:3478/udp"
+
+  caddy:
+    image: caddy:2
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
