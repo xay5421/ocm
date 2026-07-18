@@ -1,6 +1,6 @@
 # Compiled binaries
-ocm
-ocm.exe
+/ocm
+/ocm.exe
 *.exe
 
 # Go build/test artifacts
