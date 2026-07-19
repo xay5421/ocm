@@ -23,12 +23,14 @@ class WebViewActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private lateinit var status: TextView
+    private lateinit var diagBtn: TextView
     private var host: Host? = null
     private val handler = Handler(Looper.getMainLooper())
     private var loaded = false
     private var waitedMs = 0
     private var retries = 0
     private var hadError = false
+    private var lastBackAt = 0L
     private val diag = ArrayDeque<String>()
 
     private fun log(line: String) {
@@ -44,14 +46,18 @@ class WebViewActivity : AppCompatActivity() {
         val name = intent.getStringExtra("name") ?: run { finish(); return }
         host = HostStore(this).get(name) ?: run { finish(); return }
 
-        WebView.setWebContentsDebuggingEnabled(true)
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         webView = WebView(this)
         status = TextView(this).apply {
             text = "连接 $name …"
             textSize = 16f
-            setPadding(48, 96, 48, 48)
+            gravity = android.view.Gravity.CENTER_HORIZONTAL
+            setPadding(48, 48, 48, 48)
         }
-        val diagBtn = TextView(this).apply {
+        // Diagnostics button: only shown while the native status overlay is
+        // relevant (connecting / load errors). Once the page is up it is
+        // hidden so it never covers the web UI's own top-right content.
+        diagBtn = TextView(this).apply {
             text = "ⓘ"
             textSize = 18f
             alpha = 0.35f
@@ -60,7 +66,11 @@ class WebViewActivity : AppCompatActivity() {
         }
         setContentView(FrameLayout(this).apply {
             addView(webView)
-            addView(status)
+            // Centered vertically so it never sits under the top-right ⓘ button.
+            addView(status, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.view.Gravity.CENTER,
+            ))
             addView(diagBtn, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 android.view.Gravity.TOP or android.view.Gravity.END,
@@ -95,9 +105,12 @@ class WebViewActivity : AppCompatActivity() {
             override fun shouldInterceptRequest(
                 view: WebView, request: WebResourceRequest,
             ): WebResourceResponse? {
-                val u = request.url.toString()
-                if (!u.contains("/assets/") && !u.contains("favicon")) {
-                    log("REQ ${request.method} $u")
+                // Per-request logging is only worth its cost in debug builds.
+                if (BuildConfig.DEBUG) {
+                    val u = request.url.toString()
+                    if (!u.contains("/assets/") && !u.contains("favicon")) {
+                        log("REQ ${request.method} $u")
+                    }
                 }
                 return null
             }
@@ -110,6 +123,7 @@ class WebViewActivity : AppCompatActivity() {
                 if (!request.isForMainFrame) return
                 hadError = true
                 status.visibility = TextView.VISIBLE
+                diagBtn.visibility = TextView.VISIBLE
                 val desc = "${error.errorCode} ${error.description}"
                 if (retries < 5) {
                     retries++
@@ -131,6 +145,7 @@ class WebViewActivity : AppCompatActivity() {
                 if (!hadError) {
                     retries = 0
                     status.visibility = TextView.GONE
+                    diagBtn.visibility = TextView.GONE
                 }
                 injectProjectSeed(view)
                 injectProbe(view)
@@ -138,14 +153,33 @@ class WebViewActivity : AppCompatActivity() {
         }
         webView.webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
-                log("JS[${msg.messageLevel()}] ${msg.message()} (${msg.sourceId()}:${msg.lineNumber()})")
+                val m = msg.message()
+                if (BuildConfig.DEBUG ||
+                    msg.messageLevel() != ConsoleMessage.MessageLevel.LOG ||
+                    m.startsWith("SEED") || m.startsWith("PROBE") || m.startsWith("SNAP")
+                ) {
+                    log("JS[${msg.messageLevel()}] $m (${msg.sourceId()}:${msg.lineNumber()})")
+                }
                 return true
             }
         }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (webView.canGoBack()) webView.goBack() else finish()
+                // Never delegate to webView.goBack(): the opencode web UI is an
+                // SPA that keeps pushing history entries, so in-page back would
+                // trap the user here forever. Back means "leave this host";
+                // double-press guards against accidental back gestures (an exit
+                // tears down the tunnel, reconnecting takes seconds).
+                val now = android.os.SystemClock.uptimeMillis()
+                if (now - lastBackAt < 2000) {
+                    finish()
+                    return
+                }
+                lastBackAt = now
+                android.widget.Toast.makeText(
+                    this@WebViewActivity, "再按一次返回主机列表", android.widget.Toast.LENGTH_SHORT,
+                ).show()
             }
         })
 
@@ -159,35 +193,52 @@ class WebViewActivity : AppCompatActivity() {
     /**
      * The opencode web UI only lists projects/sessions that were "opened" in this
      * browser (localStorage `opencode.global.dat:server`). A fresh WebView therefore
-     * shows an empty sidebar even though the server has sessions. Seed the host's
-     * directory into that registry so the session list appears on first use.
+     * shows an empty sidebar even though the server has sessions. Ask the server for
+     * every directory that has sessions and seed them all into that registry, so the
+     * sidebar mirrors the server ("full sync") on first use.
      */
     private fun injectProjectSeed(view: WebView) {
         val dir = host?.directory ?: ""
-        if (dir.isEmpty()) return
         val dirJson = org.json.JSONObject.quote(dir)
         val js = """
             (function(){
-              try {
-                var dir = $dirJson;
-                var KEY = 'opencode.global.dat:server';
-                var cur = null;
-                try { cur = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) {}
-                var next = (cur && typeof cur === 'object' && !Array.isArray(cur)) ? cur
-                  : { list: [], projects: {}, lastProject: {}, recentlyClosed: {} };
-                next.projects = next.projects || {};
-                var list = Array.isArray(next.projects.local) ? next.projects.local : [];
-                if (list.some(function(p){ return p && p.worktree === dir; })) return;
-                next.projects.local = list.concat([{ worktree: dir, expanded: true }]);
-                next.lastProject = next.lastProject || {};
-                if (!next.lastProject.local) next.lastProject.local = dir;
-                localStorage.setItem(KEY, JSON.stringify(next));
-                console.log('SEED registered project ' + dir);
-                if (!sessionStorage.getItem('ocmSeedReload')) {
-                  sessionStorage.setItem('ocmSeedReload', '1');
-                  location.reload();
-                }
-              } catch (e) { console.log('SEED fail ' + e); }
+              if (window.__ocmSeedRan) return; window.__ocmSeedRan = true;
+              var hostDir = $dirJson;
+              var KEY = 'opencode.global.dat:server';
+              fetch('/session', { headers: { accept: 'application/json' } })
+                .then(function(r){ return r.json(); })
+                .then(function(all){
+                  var dirs = {};
+                  if (hostDir) dirs[hostDir] = true;
+                  (Array.isArray(all) ? all : []).forEach(function(s){
+                    if (s && s.directory && !s.parentID && !(s.time && s.time.archived)) {
+                      dirs[s.directory] = true;
+                    }
+                  });
+                  var cur = null;
+                  try { cur = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) {}
+                  var next = (cur && typeof cur === 'object' && !Array.isArray(cur)) ? cur
+                    : { list: [], projects: {}, lastProject: {}, recentlyClosed: {} };
+                  next.projects = next.projects || {};
+                  var list = Array.isArray(next.projects.local) ? next.projects.local : [];
+                  var have = {};
+                  list.forEach(function(p){ if (p && p.worktree) have[p.worktree] = true; });
+                  var added = 0;
+                  Object.keys(dirs).forEach(function(d){
+                    if (!have[d]) { list.push({ worktree: d, expanded: true }); added++; }
+                  });
+                  if (!added) return;
+                  next.projects.local = list;
+                  next.lastProject = next.lastProject || {};
+                  if (!next.lastProject.local) next.lastProject.local = hostDir || Object.keys(dirs)[0];
+                  localStorage.setItem(KEY, JSON.stringify(next));
+                  console.log('SEED added ' + added + ' projects: ' + Object.keys(dirs).join(', '));
+                  if (!sessionStorage.getItem('ocmSeedReload')) {
+                    sessionStorage.setItem('ocmSeedReload', '1');
+                    location.reload();
+                  }
+                })
+                .catch(function(e){ console.log('SEED fail ' + e); });
             })();
         """.trimIndent()
         view.evaluateJavascript(js, null)
@@ -195,6 +246,22 @@ class WebViewActivity : AppCompatActivity() {
 
     /** In-page probe: does fetch work? is data reachable from JS? */
     private fun injectProbe(view: WebView) {
+        // Error listeners are cheap and always useful for the ⓘ dialog; the
+        // fetch wrapper and DOM probing below are debug-only overhead.
+        if (!BuildConfig.DEBUG) {
+            view.evaluateJavascript("""
+                (function(){
+                  if (window.__ocmProbed) return; window.__ocmProbed = true;
+                  window.addEventListener('error', function(e){
+                    console.log('PROBE window.onerror: ' + e.message + ' @' + e.filename + ':' + e.lineno);
+                  });
+                  window.addEventListener('unhandledrejection', function(e){
+                    console.log('PROBE unhandledrejection: ' + e.reason);
+                  });
+                })();
+            """.trimIndent(), null)
+            return
+        }
         val js = """
             (function(){
               if (window.__ocmProbed) return; window.__ocmProbed = true;

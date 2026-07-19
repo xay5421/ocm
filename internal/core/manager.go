@@ -397,12 +397,15 @@ func fillSessions(c *Client, st *HostState, sessionLimit int) {
 	}
 }
 
-// Snapshot inspects one remote host without changing anything.
-func (m *Manager) Snapshot(name string, h config.Host, withSessions bool, sessionLimit int) HostState {
+// snapshotWithTunnel inspects one remote host without changing anything,
+// with the tunnel pid already resolved, so SnapshotAll can look up all
+// tunnels with a single process scan.
+func (m *Manager) snapshotWithTunnel(name string, h config.Host, tunnelPID int, tunnel bool,
+	withSessions bool, sessionLimit int) HostState {
 	st := HostState{Name: name, SSH: h.SSH, URL: BaseURL(h)}
-	if pid, ok := TunnelPID(h); ok {
+	if tunnel {
 		st.Tunnel = true
-		st.TunnelPID = pid
+		st.TunnelPID = tunnelPID
 	}
 	c := NewClient(st.URL, h.Password)
 	version, ok := c.Health()
@@ -415,7 +418,9 @@ func (m *Manager) Snapshot(name string, h config.Host, withSessions bool, sessio
 }
 
 // SnapshotAll inspects all hosts concurrently: auto-discovered local
-// instances first, then the configured remote hosts.
+// instances first, then the configured remote hosts. Tunnel pids for all
+// hosts are resolved from one process scan (on Windows each scan spawns a
+// PowerShell process, so per-host scans would dominate the snapshot cost).
 func (m *Manager) SnapshotAll(withSessions bool, sessionLimit int) []HostState {
 	names := m.Config.Names()
 	states := make([]HostState, len(names))
@@ -425,9 +430,15 @@ func (m *Manager) SnapshotAll(withSessions bool, sessionLimit int) []HostState {
 		local = m.SnapshotLocal(withSessions, sessionLimit)
 		done <- struct{}{}
 	}()
+	var procs []procEntry
+	if len(names) > 0 {
+		procs = sshProcesses()
+	}
 	for i, name := range names {
 		go func(i int, name string) {
-			states[i] = m.Snapshot(name, m.Config.Hosts[name], withSessions, sessionLimit)
+			h := m.Config.Hosts[name]
+			pid, ok := matchTunnel(procs, tunnelPattern(h))
+			states[i] = m.snapshotWithTunnel(name, h, pid, ok, withSessions, sessionLimit)
 			done <- struct{}{}
 		}(i, name)
 	}

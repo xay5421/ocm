@@ -24,6 +24,51 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Signed Android APK. Requires repository secrets:
+  #   ANDROID_KEYSTORE_BASE64  - base64 of the release keystore file
+  #   ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+  # Skipped gracefully when the secrets are not configured (e.g. forks).
+  android-apk:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check signing secrets
+        id: signing
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::ANDROID_KEYSTORE_BASE64 not set; skipping Android build"
+          fi
+      - uses: actions/setup-java@v4
+        if: steps.signing.outputs.available == 'true'
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Build signed release APK
+        if: steps.signing.outputs.available == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cd android
+          echo "$KEYSTORE_BASE64" | base64 -d > ocm-release.keystore
+          {
+            echo "storeFile=ocm-release.keystore"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > keystore.properties
+          ./gradlew --no-daemon :app:assembleRelease
+          rm -f keystore.properties ocm-release.keystore
+          gh release upload "${GITHUB_REF_NAME}" app/build/outputs/apk/release/ocm-v*.apk --clobber
+
   # The macOS app needs cgo (WKWebView), so it is built natively here and
   # attached to the release created by the job above.
   macos-app:

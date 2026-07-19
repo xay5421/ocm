@@ -186,6 +186,26 @@ Per platform:
 
 Running `ocm` without arguments in a terminal prints the help text.
 
+## Android app
+
+The [`android/`](android/) directory contains a native Android client
+(`ocm-v<version>.apk` in releases). It keeps its own host list, opens an SSH
+tunnel to the selected host (as a foreground service, with its own ed25519
+key), and shows the opencode web UI in a WebView.
+
+- On first run, open the menu's **本机公钥** (device public key) and append it
+  to `~/.ssh/authorized_keys` on each host.
+- The phone must be able to reach your hosts over SSH. If they have no
+  public IP, put everything on a private tailnet — see
+  [`deploy/headscale/`](deploy/headscale/) for a self-hosted setup guide.
+- **配置导入/导出** (config export/import) transfers hosts *and* the SSH
+  identity between devices as JSON — treat the export as a secret.
+- Back gesture: press back twice to return to the host list.
+
+Build from source with `./gradlew :app:assembleRelease` in `android/`
+(unsigned unless you provide `android/keystore.properties`; see
+`app/build.gradle.kts`).
+
 ## How it works
 
 `ocm up <host>`:

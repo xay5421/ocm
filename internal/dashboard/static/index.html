@@ -85,10 +85,10 @@ async function api(path, opts) {
   return data;
 }
 
-async function refresh() {
+async function refresh(force) {
   try {
     const state = await api("/api/state");
-    render(state);
+    render(state, force);
     $("#updated").textContent = new Date().toLocaleTimeString();
   } catch (e) { toast("获取状态失败: " + e.message); }
 }
@@ -108,11 +108,16 @@ function info(name, tag, urlHTML) {
   </div>`;
 }
 
-function btn(label, cls, key, handler, disabled) {
-  return `<button class="${cls}" ${disabled ? "disabled" : ""} onclick="${handler}">${label}</button>`;
-}
+let lastRenderKey = "";
 
-function render(state) {
+function render(state, force) {
+  // Skip the DOM rebuild when nothing changed since the last render; this
+  // keeps hover/focus state alive across the 5s poll. The busy set is part
+  // of the key because it decides which buttons are disabled.
+  const key = JSON.stringify(state) + "|" + [...busy].sort().join(",");
+  if (!force && key === lastRenderKey) return;
+  lastRenderKey = key;
+
   const root = $("#hosts"); root.innerHTML = "";
   const locals = state.filter(h => h.local);
   const remotes = state.filter(h => !h.local);
@@ -170,9 +175,7 @@ function render(state) {
 async function act(path, key, verb, btn) {
   busy.add(key);
   btn.disabled = true;
-  if (verb === "连接") btn.textContent = "连接中…";
-  if (verb === "重启") btn.textContent = "重启中…";
-  if (verb === "升级") btn.textContent = "升级中…";
+  btn.textContent = verb + "中…";
   try {
     const data = await api(path, {method: "POST"});
     if (verb === "升级" && data.output) {
@@ -186,11 +189,15 @@ async function act(path, key, verb, btn) {
     toast(`${key} ${verb}失败: ` + e.message, 6000);
   }
   busy.delete(key);
-  refresh();
+  // Force: the button label/disabled state was mutated directly above, so
+  // the DOM must be rebuilt even if the server state is unchanged.
+  refresh(true);
 }
 
 refresh();
-setInterval(refresh, 5000);
+setInterval(() => { if (!document.hidden) refresh(); }, 5000);
+// Catch up right away when the window becomes visible again.
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 </script>
 </body>
 </html>

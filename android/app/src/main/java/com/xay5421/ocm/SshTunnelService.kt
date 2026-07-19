@@ -38,8 +38,6 @@ class SshTunnelService : Service() {
             private set
         @Volatile var lastError: String = ""
             private set
-        @Volatile var currentHost: String = ""
-            private set
     }
 
     private var client: SSHClient? = null
@@ -60,7 +58,6 @@ class SshTunnelService : Service() {
             ACTION_STOP -> {
                 disconnect()
                 state = STATE_IDLE
-                currentHost = ""
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -79,7 +76,6 @@ class SshTunnelService : Service() {
         // if Application.onCreate did not run in this process.
         App.installFullBouncyCastle()
         state = STATE_CONNECTING
-        currentHost = host.name
         lastError = ""
         worker = Thread {
             try {

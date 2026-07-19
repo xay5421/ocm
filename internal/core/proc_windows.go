@@ -122,26 +122,23 @@ func killProcess(pid int) error {
 	return hideWindow(exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")).Run()
 }
 
-// findSSHTunnelPID returns the pid of the ssh process whose command line
-// contains "-L <pattern>", if any.
-func findSSHTunnelPID(pattern string) (int, bool) {
-	// Pattern may contain user-provided SSH hostnames; escape single quotes
-	// for PowerShell's single-quoted string syntax ('' represents one ').
-	// String.Contains is an ordinal substring test, unlike -like, whose
-	// wildcard syntax would misinterpret [ ] in hostnames (IPv6 literals).
-	safe := strings.ReplaceAll(pattern, "'", "''")
-	query := fmt.Sprintf(
-		`Get-CimInstance Win32_Process -Filter "Name='ssh.exe'" | `+
-			`Where-Object { $_.CommandLine -ne $null -and $_.CommandLine.Contains('-L %s') } | `+
-			`Select-Object -First 1 -ExpandProperty ProcessId`, safe)
+// sshProcesses lists all running ssh.exe processes (pid + command line) in a
+// single PowerShell invocation. Matching against tunnel patterns happens in
+// Go (see matchTunnel), so one scan serves any number of hosts - spawning
+// PowerShell is by far the dominant cost here.
+func sshProcesses() []procEntry {
+	query := `Get-CimInstance Win32_Process -Filter "Name='ssh.exe'" | ` +
+		`ForEach-Object { '{0} {1}' -f $_.ProcessId, $_.CommandLine }`
 	out, err := hideWindow(exec.Command("powershell",
 		"-NoProfile", "-NonInteractive", "-Command", query)).Output()
 	if err != nil {
-		return 0, false
+		return nil
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil {
-		return 0, false
+	var procs []procEntry
+	for line := range strings.Lines(string(out)) {
+		if p, ok := parsePidLine(line); ok {
+			procs = append(procs, p)
+		}
 	}
-	return pid, true
+	return procs
 }

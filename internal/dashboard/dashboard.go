@@ -29,11 +29,14 @@ var staticFS embed.FS
 type Server struct {
 	Manager *core.Manager
 
-	// stateMu serializes snapshotting so concurrent /api/state requests
-	// (slow hosts) cannot pile up; results are briefly cached.
+	// stateMu guards the snapshot cache below. Snapshotting itself runs
+	// outside the lock: while one request refreshes (slow hosts can take
+	// seconds), concurrent /api/state requests are served the stale cache
+	// instead of piling up behind a mutex.
 	stateMu    sync.Mutex
 	stateCache []core.HostState
 	stateAt    time.Time
+	stateBusy  bool
 }
 
 // New creates a dashboard server.
@@ -144,12 +147,24 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	if time.Since(s.stateAt) > 2*time.Second {
-		s.stateCache = s.Manager.SnapshotAll(false, 0)
-		s.stateAt = time.Now()
+	// Serve the cache when it is fresh, or when another request is already
+	// refreshing it (slightly stale data beats blocking for seconds). Only
+	// the very first requests (no cache yet) may snapshot concurrently.
+	if time.Since(s.stateAt) <= 2*time.Second || (s.stateBusy && s.stateCache != nil) {
+		state := s.stateCache
+		s.stateMu.Unlock()
+		writeJSON(w, state)
+		return
 	}
-	writeJSON(w, s.stateCache)
+	s.stateBusy = true
+	s.stateMu.Unlock()
+
+	state := s.Manager.SnapshotAll(false, 0)
+
+	s.stateMu.Lock()
+	s.stateCache, s.stateAt, s.stateBusy = state, time.Now(), false
+	s.stateMu.Unlock()
+	writeJSON(w, state)
 }
 
 func (s *Server) handleUp(w http.ResponseWriter, r *http.Request) {

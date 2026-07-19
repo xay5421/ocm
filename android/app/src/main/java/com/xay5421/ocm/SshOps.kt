@@ -16,12 +16,12 @@ object SshOps {
 
     enum class Status { OFFLINE, NO_SERVE, RUNNING }
 
-    fun open(context: Context, host: Host, timeoutMs: Int = 10000): SSHClient {
+    fun open(context: Context, host: Host, timeoutMs: Int = 10000, readTimeoutMs: Int = 15000): SSHClient {
         App.installFullBouncyCastle()
         val ssh = SSHClient()
         ssh.addHostKeyVerifier(PromiscuousVerifier())
         ssh.connectTimeout = timeoutMs
-        ssh.timeout = 15000
+        ssh.timeout = readTimeoutMs
         ssh.connect(host.host, host.port)
         ssh.authPublickey(host.user, KeyPairWrapper(KeyManager.keyPair(context)))
         return ssh
@@ -96,7 +96,9 @@ object SshOps {
 
     /** `opencode upgrade` + version, like ocm's UpgradeOpencode. */
     fun upgrade(context: Context, host: Host): String {
-        open(context, host).use { ssh ->
+        // Long read timeout: the upgrade downloads a binary and may produce
+        // no output for minutes; the default 15s would cut the session off.
+        open(context, host, readTimeoutMs = 200_000).use { ssh ->
             return exec(
                 ssh,
                 "$OPENCODE_BIN upgrade 2>&1 && printf 'version: ' && $OPENCODE_BIN --version 2>&1",

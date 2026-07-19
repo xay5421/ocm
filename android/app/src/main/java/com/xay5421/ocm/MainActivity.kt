@@ -28,12 +28,14 @@ class MainActivity : AppCompatActivity() {
     private var hosts: List<Host> = emptyList()
     private val statuses = HashMap<String, SshOps.Status>()
     private val probing = java.util.Collections.synchronizedSet(HashSet<String>())
+    private val probeExecutor = java.util.concurrent.Executors.newFixedThreadPool(3)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         setSupportActionBar(findViewById(R.id.toolbar))
-        supportActionBar?.subtitle = "v${BuildConfig.VERSION_NAME} · ${BuildConfig.BUILD_TIME}"
+        supportActionBar?.subtitle = "v${BuildConfig.VERSION_NAME}" +
+            if (BuildConfig.BUILD_TIME.isEmpty()) "" else " · ${BuildConfig.BUILD_TIME}"
 
         store = HostStore(this)
         KeyManager.ensureKey(this)
@@ -58,6 +60,11 @@ class MainActivity : AppCompatActivity() {
         refresh()
     }
 
+    override fun onDestroy() {
+        probeExecutor.shutdownNow()
+        super.onDestroy()
+    }
+
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.menu_main, menu)
         return true
@@ -79,14 +86,17 @@ class MainActivity : AppCompatActivity() {
     private fun probeAll() {
         hosts.forEach { h ->
             if (!probing.add(h.name)) return@forEach
-            Thread {
+            probeExecutor.execute {
                 val st = SshOps.probe(this, h)
                 runOnUiThread {
                     probing.remove(h.name)
                     statuses[h.name] = st
-                    if (!isDestroyed) adapter.notifyDataSetChanged()
+                    if (isDestroyed) return@runOnUiThread
+                    // Only rebind the row for this host instead of the whole list.
+                    val idx = hosts.indexOfFirst { it.name == h.name }
+                    if (idx >= 0) adapter.notifyItemChanged(idx) else adapter.notifyDataSetChanged()
                 }
-            }.start()
+            }
         }
     }
 
@@ -136,6 +146,12 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    private fun copyToClipboard(label: String, text: String) {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText(label, text))
+        Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show()
+    }
+
     private fun showImportExport() {
         val et = android.widget.EditText(this).apply {
             setText(store.exportJson())
@@ -158,11 +174,7 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "JSON 解析失败：${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
-            .setNeutralButton("复制") { _, _ ->
-                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("ocm-hosts", store.exportJson()))
-                Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show()
-            }
+            .setNeutralButton("复制") { _, _ -> copyToClipboard("ocm-hosts", store.exportJson()) }
             .setNegativeButton("取消", null)
             .show()
     }
@@ -172,11 +184,7 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("本机公钥")
             .setMessage(pub + "\n\n把这一行加到目标机的 ~/.ssh/authorized_keys")
-            .setPositiveButton("复制") { _, _ ->
-                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("pubkey", pub))
-                Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show()
-            }
+            .setPositiveButton("复制") { _, _ -> copyToClipboard("pubkey", pub) }
             .setNegativeButton("关闭", null)
             .show()
     }

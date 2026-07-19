@@ -6,3 +6,8 @@ local.properties
 .kotlin/
 captures/
 build-log.txt
+
+# Release signing (never commit)
+keystore.properties
+*.keystore
+*.jks

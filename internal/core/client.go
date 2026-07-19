@@ -4,7 +4,6 @@
 package core
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -110,14 +109,13 @@ func (c *Client) health() (version string, status int, healthy bool) {
 	return v.Version, resp.StatusCode, v.Healthy
 }
 
-// Session is a subset of the opencode Session type.
+// Session is a subset of the opencode Session type (only the fields ocm
+// actually consumes; unknown JSON fields are ignored on decode).
 type Session struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
 	Directory string `json:"directory"`
-	Version   string `json:"version"`
 	Time      struct {
-		Created int64 `json:"created"`
 		Updated int64 `json:"updated"`
 	} `json:"time"`
 }
@@ -151,95 +149,6 @@ func (c *Client) SessionStatus() (map[string]string, error) {
 		out[id] = status
 	}
 	return out, nil
-}
-
-func (c *Client) post(path string, body any, out any) error {
-	var reader io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		reader = bytes.NewReader(data)
-	}
-	req, err := c.newRequest(http.MethodPost, path, reader)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("POST %s: %s: %s", path, resp.Status, Truncate(string(respBody), 200))
-	}
-	if out == nil || len(respBody) == 0 {
-		return nil
-	}
-	return json.Unmarshal(respBody, out)
-}
-
-// MessageEntry is one message with its parts, decoded loosely.
-type MessageEntry struct {
-	Info struct {
-		ID    string `json:"id"`
-		Role  string `json:"role"`
-		Error any    `json:"error,omitempty"`
-		Time  struct {
-			Created int64 `json:"created"`
-		} `json:"time"`
-	} `json:"info"`
-	Parts []MessagePart `json:"parts"`
-}
-
-// MessagePart is a subset of the opencode Part type.
-type MessagePart struct {
-	Type  string `json:"type"`
-	Text  string `json:"text,omitempty"`
-	Tool  string `json:"tool,omitempty"`
-	State *struct {
-		Status string `json:"status,omitempty"`
-		Title  string `json:"title,omitempty"`
-	} `json:"state,omitempty"`
-}
-
-// Messages returns up to limit messages of a session.
-func (c *Client) Messages(sessionID string, limit int) ([]MessageEntry, error) {
-	path := "/session/" + sessionID + "/message"
-	if limit > 0 {
-		path += fmt.Sprintf("?limit=%d", limit)
-	}
-	var out []MessageEntry
-	if err := c.get(path, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// PromptAsync sends a text prompt to a session without waiting for the reply.
-func (c *Client) PromptAsync(sessionID, text string) error {
-	body := map[string]any{
-		"parts": []map[string]any{{"type": "text", "text": text}},
-	}
-	return c.post("/session/"+sessionID+"/prompt_async", body, nil)
-}
-
-// RespondPermission answers a pending permission request.
-// response is one of "once", "always", "reject".
-func (c *Client) RespondPermission(sessionID, permissionID, response string) error {
-	return c.post("/session/"+sessionID+"/permissions/"+permissionID,
-		map[string]any{"response": response}, nil)
-}
-
-// Abort aborts a running session.
-func (c *Client) Abort(sessionID string) error {
-	return c.post("/session/"+sessionID+"/abort", nil, nil)
 }
 
 // Truncate shortens s to at most n runes, appending "..." when cut. It is

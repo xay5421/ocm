@@ -4,7 +4,6 @@ package core
 
 import (
 	"os/exec"
-	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -82,22 +81,28 @@ func killProcess(pid int) error {
 	return syscall.Kill(pid, syscall.SIGTERM)
 }
 
-// findSSHTunnelPID returns the pid of the ssh process whose command line
-// contains "-L <pattern>", if any.
-func findSSHTunnelPID(pattern string) (int, bool) {
-	// Quote regex metacharacters so that SSH hostnames containing dots or
-	// other regex-special characters are matched literally.
-	out, err := exec.Command("pgrep", "-f", "ssh.*-L "+regexp.QuoteMeta(pattern)).Output()
+// sshProcesses lists all running ssh processes (pid + command line) in a
+// single ps invocation. Matching against tunnel patterns happens in Go (see
+// matchTunnel), so one scan serves any number of hosts.
+func sshProcesses() []procEntry {
+	out, err := exec.Command("ps", "-axo", "pid=,command=").Output()
 	if err != nil {
-		return 0, false
+		return nil
 	}
-	fields := strings.Fields(string(out))
-	if len(fields) == 0 {
-		return 0, false
+	var procs []procEntry
+	for line := range strings.Lines(string(out)) {
+		p, ok := parsePidLine(line)
+		if !ok {
+			continue
+		}
+		// Keep only ssh commands ("ssh", "/usr/bin/ssh", ...); the first
+		// token is the executable. This mirrors the old `pgrep -f "ssh.*-L"`
+		// requirement that ssh appears before the -L argument.
+		cmd, _, _ := strings.Cut(p.cmdline, " ")
+		if cmd != "ssh" && !strings.HasSuffix(cmd, "/ssh") {
+			continue
+		}
+		procs = append(procs, p)
 	}
-	pid, err := strconv.Atoi(fields[0])
-	if err != nil {
-		return 0, false
-	}
-	return pid, true
+	return procs
 }
