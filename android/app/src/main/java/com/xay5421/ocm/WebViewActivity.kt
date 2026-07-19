@@ -33,6 +33,24 @@ class WebViewActivity : AppCompatActivity() {
     private var lastBackAt = 0L
     private val diag = ArrayDeque<String>()
 
+    // Battery: a backgrounded tunnel burns radio power with 30s keepalives,
+    // and sessions live on the server anyway. After a grace period in the
+    // background the tunnel is torn down; returning reconnects automatically.
+    private var bgStopped = false
+    private val bgStopRunnable = Runnable {
+        bgStopped = true
+        log("后台超过 ${BG_DISCONNECT_MS / 60000} 分钟，断开隧道以省电")
+        try {
+            startService(Intent(this, SshTunnelService::class.java).apply {
+                action = SshTunnelService.ACTION_STOP
+            })
+        } catch (_: Exception) {}
+    }
+
+    companion object {
+        private const val BG_DISCONNECT_MS = 3 * 60_000L
+    }
+
     private fun log(line: String) {
         synchronized(diag) {
             diag.addLast("${android.text.format.DateFormat.format("HH:mm:ss", System.currentTimeMillis())} $line")
@@ -367,6 +385,36 @@ class WebViewActivity : AppCompatActivity() {
             return
         }
         handler.postDelayed(::poll, 500)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (!::webView.isInitialized || isFinishing) return
+        // Freeze page JS/timers in the background; the SSE reconnects on resume.
+        webView.onPause()
+        webView.pauseTimers()
+        handler.postDelayed(bgStopRunnable, BG_DISCONNECT_MS)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (!::webView.isInitialized) return
+        handler.removeCallbacks(bgStopRunnable)
+        webView.resumeTimers()
+        webView.onResume()
+        if (bgStopped) {
+            bgStopped = false
+            loaded = false
+            waitedMs = 0
+            log("回到前台，重连隧道")
+            status.text = "重新连接 ${host?.name} …"
+            status.visibility = TextView.VISIBLE
+            startService(Intent(this, SshTunnelService::class.java).apply {
+                action = SshTunnelService.ACTION_CONNECT
+                putExtra("name", host?.name)
+            })
+            handler.postDelayed(::poll, 500)
+        }
     }
 
     override fun onDestroy() {
