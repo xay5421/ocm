@@ -90,8 +90,34 @@ func TunnelPID(h config.Host) (int, bool) {
 // with its output going to a log file, and ocm polls until the forwarded
 // local port accepts connections.
 func (m *Manager) StartTunnel(h config.Host) error {
-	if _, ok := TunnelPID(h); ok {
-		return nil
+	return m.startTunnel(h, false)
+}
+
+// startTunnel implements StartTunnel. serverDown means the caller knows the
+// remote server is intentionally not running (e.g. mid-restart): an
+// end-to-end probe through the tunnel cannot succeed then and says nothing
+// about the tunnel itself, so an existing ssh process is kept as-is.
+func (m *Manager) startTunnel(h config.Host, serverDown bool) error {
+	if pid, ok := TunnelPID(h); ok {
+		if serverDown {
+			return nil
+		}
+		c := NewClient(BaseURL(h), h.Password)
+		if c.TunnelAlive() {
+			return nil
+		}
+		m.logf("existing tunnel (pid %d) is unresponsive, restarting", pid)
+		if err := killProcess(pid); err != nil {
+			return fmt.Errorf("kill broken tunnel (pid %d): %w", pid, err)
+		}
+		// killProcess only sends the signal and returns; wait for the old
+		// ssh to actually exit and release the local port, otherwise the
+		// port probe below races with it and misreports "already in use".
+		if !pollUntil(5*time.Second, 100*time.Millisecond, func() bool {
+			return procName(pid) == ""
+		}) {
+			return fmt.Errorf("old tunnel (pid %d) did not exit after SIGTERM", pid)
+		}
 	}
 	// Fail fast if another process already holds the local port. Without
 	// this check the readiness dial below would mistake that process for
@@ -310,11 +336,19 @@ func WaitHealthy(h config.Host, timeout time.Duration) (string, bool) {
 // Up makes the host reachable: tunnel up + remote server running. Returns the
 // server version.
 func (m *Manager) Up(h config.Host) (string, error) {
-	if err := m.StartTunnel(h); err != nil {
+	return m.up(h, false)
+}
+
+// up implements Up. serverDown skips the checks that assume the remote
+// server may already be running (see startTunnel).
+func (m *Manager) up(h config.Host, serverDown bool) (string, error) {
+	if err := m.startTunnel(h, serverDown); err != nil {
 		return "", err
 	}
-	if v, ok := WaitHealthy(h, 2*time.Second); ok {
-		return v, nil
+	if !serverDown {
+		if v, ok := WaitHealthy(h, 2*time.Second); ok {
+			return v, nil
+		}
 	}
 	if err := m.StartServe(h); err != nil {
 		return "", err
@@ -342,7 +376,10 @@ func (m *Manager) RestartServe(h config.Host) (string, error) {
 	if !stopped {
 		return "", fmt.Errorf("old server on %s did not stop", h.SSH)
 	}
-	return m.Up(h)
+	// The server was just stopped on purpose: tell Up not to probe health
+	// through the tunnel, which would misdiagnose a perfectly good tunnel
+	// as broken (and kill it) just because nothing answers on the far end.
+	return m.up(h, true)
 }
 
 // HostState is a point-in-time snapshot of one host, used by list/status

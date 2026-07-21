@@ -151,6 +151,25 @@ func (c *Client) SessionStatus() (map[string]string, error) {
 	return out, nil
 }
 
+// TunnelAlive checks whether the tunnel forwards traffic by making a quick
+// HTTP request and seeing if *any* response comes back (even an error / 401).
+func (c *Client) TunnelAlive() bool {
+	req, err := c.newRequest(http.MethodGet, "/global/health", nil)
+	if err != nil {
+		return false
+	}
+	hc := c.healthHTTP
+	if hc == nil {
+		hc = &http.Client{Timeout: 2 * time.Second}
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return true
+}
+
 // Truncate shortens s to at most n runes, appending "..." when cut. It is
 // rune-based so multi-byte characters are never split.
 func Truncate(s string, n int) string {
